@@ -1,0 +1,32 @@
+Parallel Computing Anleitung
+
+git clone https://github.com/microsoft/vcpkg
+cd vcpkg
+bootstrap-vcpkg.bat
+
+vcpkg install freeglut:x64-windows
+vcpkg install glew:x64-windows
+
+
+Kompilieren:
+x64 Native Tools Command...
+
+nvcc snow_simulation.cu -o snow_sim.exe ^
+  -I"C:\vcpkg\installed\x64-windows\include" ^
+  -L"C:\vcpkg\installed\x64-windows\lib" ^
+  -lfreeglut -lglew32 -lopengl32 -lglu32 ^
+  -arch=sm_120
+
+
+
+
+
+Für Ubuntu:
+
+sudo apt install nvidia-cuda-toolkit freeglut3-dev libglew-dev
+
+nvcc snow_simulation.cu -o snow_sim \
+    -lGL -lGLU -lglut -lGLEW \
+    -arch=sm_86
+
+./snow_sim
