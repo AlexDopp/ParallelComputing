@@ -243,7 +243,7 @@ __global__ void updateFlakesKernel(Flake* flakes, curandState* rngStates, int n,
         f.spawnDelay = curand_uniform(&rng) * 1.0f;
     }
 
-    // ── Kollisionsvariablen ──
+    // Kollisionsvariablen
     float nx, ny, pen;
     float restitution = 0.05f;
 
@@ -393,7 +393,7 @@ static void drawScene()
         drawFilledTriangle(L.x0-so, L.yBase, L.x1+so, L.yBase, TREE_X, L.yTip+so*2.f);
     }
 
-    // ── Schneeflocken ──
+    // Schneeflocken
     glPointSize(3.5f);
     glBegin(GL_POINTS);
     for (int i = 0; i < NUM_FLAKES; i++) {
