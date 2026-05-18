@@ -16,9 +16,9 @@
  *   r        – Simulation zurücksetzen
  */
 
+#include <GL/glew.h>
 #include <cuda_runtime.h>
 #include <cuda_gl_interop.h>
-#include <GL/glew.h>
 #include <GL/freeglut.h>
 
 #include <cstdio>
