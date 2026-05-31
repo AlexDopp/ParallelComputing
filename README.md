@@ -5,7 +5,7 @@ Dieses Programm simuliert fallenden Schnee in einer 2D-Szene mit Haus und Baum.
 Es dient gleichzeitig als Benchmark, um den Leistungsunterschied zwischen einer reinen CPU-Simulation  
 und einer GPU-beschleunigten CUDA-Simulation zu vergleichen.  
 
-![Demo](https://github.com/user-attachments/assets/7d90e08f-8c69-4e9a-8b6f-6603b4bdde04)
+![Video](https://github.com/user-attachments/assets/7d90e08f-8c69-4e9a-8b6f-6603b4bdde04)
 
 ## Das Koordinatensystem
 
@@ -153,6 +153,7 @@ if (vn < 0) {
 ```
 
 Der `restitution`-Faktor von `0.05` bewirkt, dass die Flocke nach einer Kollision mit 5% der Aufprallgeschwindigkeit  
-zurückprallt und somit fast vollständig inelastisch wirkt. Als zweite Sicherheitsebene wird nach der Kollisionsschleife geprüft,  
+zurückprallt und somit fast vollständig inelastisch wirkt.  
+Als zweite Sicherheitsebene wird nach der Kollisionsschleife geprüft,  
 ob die Flocke trotz Auflösung noch innerhalb einer Dreiecksgeometrie liegt.  
 Falls ja, wird die Flocke sofort neu gespawnt.  
