@@ -35,13 +35,15 @@ vy -= GRAVITY × fallSpeed × dt + turbY × dt
 ```
 `radius` beinhält den Kollisionsradius  
 
-`spawnDelay` speichert nach Erreichen von `y < 0` eine zufällige Wartezeit zwischen 0 und 1 Sekunde, die eine Flocke abwarten muss, bevor sie respawned.  
+`spawnDelay` speichert nach Erreichen von `y < 0` eine zufällige Wartezeit zwischen 0 und 1 Sekunde,  
+die eine Flocke abwarten muss, bevor sie respawned.  
 
 `fallSpeed` beinhält einen individuellen Multiplikator auf die Schwerkraft zwischen 100% und 150% in 5%-Schritten.  
 
 ## Zufallszahlengenerierung im CPU-Modus
 
-Im CPU-Modus hat jede Flocke einen eigenen `uint64_t`-Zustandswert (`h_rngStates[id]`). Für jede benötigte Zufallszahl wird ein **Linear Congruential Generator (LCG)** aufgerufen:
+Im CPU-Modus hat jede Flocke einen eigenen `uint64_t`-Zustandswert (`h_rngStates[id]`).  
+Für jede benötigte Zufallszahl wird ein **Linear Congruential Generator (LCG)** aufgerufen:  
 
 ```cpp
 static inline float lcgUniform(uint64_t& s) {
@@ -52,7 +54,8 @@ static inline float lcgUniform(uint64_t& s) {
 
 ## Physik-Update pro Frame per CPU
 
-Jedes Frame ruft das Programm cpuUpdateFlakes() auf. Die Funktion iteriert in einer for-Schleife sequenziell über alle Flocken und berechnet jede einzeln.  
+Jedes Frame ruft das Programm cpuUpdateFlakes() auf. 
+Die Funktion iteriert in einer for-Schleife sequenziell über alle Flocken und berechnet jede einzeln.    
 Die folgenden Schritte werden für jede aktive Flocke in dieser Reihenfolge ausgeführt.  
 
 ### Schritt 1: Inaktive Flocken mit `spawnDelay` überspringen  
@@ -68,8 +71,9 @@ turbX        = (random - 0.5) × 0.003
 turbY        = (random - 0.5) × 0.001
 ```
 
-Jede Flocke bekommt ihren eigenen, zufällig variierenden Windanteil. Das Ergebnis ist ein globaler Wind der im Mittel nach rechts weht, aber pro Flocke und Frame stark variiert.  
-Zusätzlich gibt es eine kleine zufällige Turbulenz in beide Richtungen (`turbX`, `turbY`), die eine leichte chaotische Bewegung simuliert.  
+Jede Flocke bekommt ihren eigenen, zufällig variierenden Windanteil.  
+Das Ergebnis ist ein globaler Wind der im Mittel nach rechts weht, aber pro Flocke und Frame stark variiert.  
+Zusätzlich gibt es eine kleine zufällige Turbulenz in beide Richtungen (`turbX`, `turbY`).  
 
 ### Schritt 3: Geschwindigkeit aktualisieren
 
@@ -95,7 +99,8 @@ vy  ≥  -0.003 × fallSpeed   (maximale Fallgeschwindigkeit)
 vx  ∈  [-0.004, +0.004]     (maximale Horizontalgeschwindigkeit)
 ```
 
-Die Geschwindigkeit wird nach oben und unten begrenzt, damit Flocken nicht beliebig schnell werden und bei großen Zeitschritten tief in Kollisionsgeometrie eindringen könnten.  
+Die Geschwindigkeit wird nach oben und unten begrenzt, damit Flocken nicht beliebig schnell werden  
+und bei großen Zeitschritten tief in Kollisionsgeometrie eindringen könnten.  
 
 ### Schritt 6: Position aktualisieren und horizontaler Wrap-around
 
@@ -113,18 +118,21 @@ Flocken die links aus dem Bild fliegen erscheinen rechts wieder, und umgekehrt.
 
 Wenn `y < -0.02` (Flocke hat den unteren Bildrand verlassen):
 
-Flocke wird neu gespawned mit zufälliger X-Position, `y = 1.02`, neuer zufällige Geschwindigkeit, neuem `spawnDelay` und neuem `fallSpeed`.
+Flocke wird neu gespawned mit zufälliger X-Position, `y = 1.02`, neuer zufällige Geschwindigkeit,  
+neuem `spawnDelay` und neuem `fallSpeed`.  
 
 ## Kollisionserkennung
 
 Nach dem Positions-Update wird jede Flocke ein mal pro Frame gegen alle Szenen-Geometrien geprüft.  
 Dabei werden zwei Typen von Kollisionsgeometrie verwendet:  
 
-**Achsenparalleles Rechteck (AABB):** Verwendet für die Hauswand und den Baumstamm. Die Funktion `cpu_collideAABB` findet den nächsten Punkt auf dem Rechteck zur Flockenposition,  
+**Achsenparalleles Rechteck (AABB):** Verwendet für die Hauswand und den Baumstamm.  
+Die Funktion `cpu_collideAABB` findet den nächsten Punkt auf dem Rechteck zur Flockenposition,  
 berechnet den Abstand und gibt bei Überschneidung die Kollisionsnormale und die Eindringtiefe (`pen`) zurück.  
 
 **Dreieck (Dach / Baumetagen):** Verwendet für das Hausdach und die drei Dreiecksebenen des Baums.  
-Die Funktion `cpu_collideRoof` prüft alle Kanten des Dreiecks mit der Punkt-zu-Strecke-Distanzfunktion und verwendet die nächste Kante für die Kollisionsauflösung.  
+Die Funktion `cpu_collideRoof` prüft alle Kanten des Dreiecks mit der Punkt-zu-Strecke-Distanzfunktion  
+und verwendet die nächste Kante für die Kollisionsauflösung.  
 
 ### Kollisionsauflösung
 ```
@@ -139,6 +147,7 @@ if vn < 0:
     vy -= (1 + restitution) × vn × normalY
 ```
 
-Der `restitution`-Faktor von `0.05` bewirkt, dass die Flocke nach einer Kollision mit 5% der Aufprallgeschwindigkeit zurückprallt und somit fast vollständig inelastisch wirkt.  
+Der `restitution`-Faktor von `0.05` bewirkt, dass die Flocke nach einer Kollision mit 5% der Aufprallgeschwindigkeit  
+zurückprallt und somit fast vollständig inelastisch wirkt.  
 Als zweite Sicherheitsebene wird nach der Kollisionsschleife geprüft, ob die Flocke trotz Auflösung noch innerhalb einer Dreiecksgeometrie liegt.  
 Falls ja, wird die Flocke sofort neu gespawnt.  
