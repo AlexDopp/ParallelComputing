@@ -1,8 +1,6 @@
 # CUDA Snow Simulation
 *Author: Alexander Doppelbauer*  
 
-## Überblick
-
 Dieses Programm simuliert fallenden Schnee in einer 2D-Szene mit Haus und Baum.  
 Es dient gleichzeitig als Benchmark, um den Leistungsunterschied zwischen einer reinen CPU-Simulation  
 und einer GPU-beschleunigten CUDA-Simulation zu vergleichen.  
