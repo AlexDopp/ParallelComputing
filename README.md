@@ -151,6 +151,6 @@ if (vn < 0) {
 ```
 
 Der `restitution`-Faktor von `0.05` bewirkt, dass die Flocke nach einer Kollision mit 5% der Aufprallgeschwindigkeit  
-zurückprallt und somit fast vollständig inelastisch wirkt.  
-Als zweite Sicherheitsebene wird nach der Kollisionsschleife geprüft, ob die Flocke trotz Auflösung noch innerhalb einer Dreiecksgeometrie liegt.  
+zurückprallt und somit fast vollständig inelastisch wirkt. Als zweite Sicherheitsebene wird nach der Kollisionsschleife geprüft,  
+ob die Flocke trotz Auflösung noch innerhalb einer Dreiecksgeometrie liegt.  
 Falls ja, wird die Flocke sofort neu gespawnt.  
