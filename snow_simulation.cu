@@ -670,8 +670,8 @@ int main(int argc,char**argv)
 
 #ifdef _WIN32
     g_wglSwapInterval=(PFNWGLSWAPINTERVALEXTPROC)wglGetProcAddress("wglSwapIntervalEXT");
-    if(g_wglSwapInterval){g_wglSwapInterval(1);printf("VSync: an (Toggle im Menu)\n");}
-    else printf("wglSwapIntervalEXT nicht verfugbar\n");
+    if(g_wglSwapInterval){g_wglSwapInterval(1);printf("Windows VSync: an\n");}
+    else printf("Windows VSync Toggle nicht verfuegbar\n");
 #endif
 
     glEnable(GL_POINT_SMOOTH);
