@@ -60,15 +60,15 @@ Die folgenden Schritte werden für jede aktive Flocke in dieser Reihenfolge ausg
 
 ### Schritt 1: Inaktive Flocken mit `spawnDelay` überspringen  
 ```
-if spawnDelay > 0  →  spawnDelay -= dt, überspringen (noch nicht aktiv)
+if(f.spawnDelay > 0.f){ f.spawnDelay -= dt; continue; }
 ```
 
 ### Schritt 2: Wind und Turbulenz berechnen  
 
 ```
-personalWind = WIND_BASE × 0.1 + (random - 0.5) × WIND_BASE × 4.0
-turbX        = (random - 0.5) × 0.003
-turbY        = (random - 0.5) × 0.001
+personalWind = WIND_BASE * 0.1 + (random - 0.5) * WIND_BASE * 4.0;
+turbX        = (random - 0.5) * 0.003;
+turbY        = (random - 0.5) * 0.001;
 ```
 
 Jede Flocke bekommt ihren eigenen, zufällig variierenden Windanteil.  
@@ -78,15 +78,15 @@ Zusätzlich gibt es eine kleine zufällige Turbulenz in beide Richtungen (`turbX
 ### Schritt 3: Geschwindigkeit aktualisieren
 
 ```
-vx += (personalWind + turbX) × dt
-vy -= GRAVITY × fallSpeed × dt + turbY × dt
+vx += (personalWind + turbX) * dt;
+vy -= GRAVITY * fallSpeed * dt + turbY * dt;
 ```
 
 ### Schritt 4: Dämpfung (Luftwiderstand)
 
 ```
-vx *= 0.98
-vy *= 0.99
+vx *= 0.98;
+vy *= 0.99;
 ```
 
 Pro Frame wird die Geschwindigkeit um 2% (horizontal) bzw. 1% (vertikal) reduziert.  
@@ -107,10 +107,10 @@ und bei großen Zeitschritten tief in Kollisionsgeometrie eindringen könnten.
 ### Schritt 6: Position aktualisieren und horizontaler Wrap-around
 
 ```
-x += vx
-y += vy
-if x < 0.0  →  x += 1.0
-if x > 1.0  →  x -= 1.0
+x += vx;
+y += vy;
+if(x < 0.0) x += 1.0;
+if(x > 1.0) x -= 1.0;
 ```
 
 Flocken die links aus dem Bild fliegen erscheinen rechts wieder, und umgekehrt.  
@@ -139,14 +139,15 @@ und verwendet die nächste Kante für die Kollisionsauflösung.
 ### Kollisionsauflösung
 ```
 // Position korrigieren: Flocke entlang Normale um Eindringtiefe herausschieben
-x += normalX × penetration
-y += normalY × penetration
+x += normalX * penetration;
+y += normalY * penetration;
 
 // Geschwindigkeit korrigieren: Anteil entlang Normale umkehren
-vn = vx × normalX + vy × normalY   // Normalanteil der Geschwindigkeit
-if vn < 0:
-    vx -= (1 + restitution) × vn × normalX
-    vy -= (1 + restitution) × vn × normalY
+vn = vx × normalX + vy * normalY;           // Normalanteil der Geschwindigkeit
+if (vn < 0) {
+    vx -= (1 + restitution) * vn * normalX;
+    vy -= (1 + restitution) * vn * normalY;
+}
 ```
 
 Der `restitution`-Faktor von `0.05` bewirkt, dass die Flocke nach einer Kollision mit 5% der Aufprallgeschwindigkeit  
