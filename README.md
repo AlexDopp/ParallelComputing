@@ -95,11 +95,13 @@ Das modelliert den Luftwiderstand und regelt die ständige Windbeschleunigung he
 ### Schritt 5: Geschwindigkeit begrenzen (Clamp)  
 
 ```
-vy  ≥  -0.003 × fallSpeed   (maximale Fallgeschwindigkeit)
-vx  ∈  [-0.004, +0.004]     (maximale Horizontalgeschwindigkeit)
+float mvy = -0.003f * f.fallSpeed;
+if(f.vy < mvy) f.vy = mvy;
+if(f.vx >  0.004f) f.vx =  0.004f;
+if(f.vx < -0.004f) f.vx = -0.004f;
 ```
 
-Die Geschwindigkeit wird nach oben und unten begrenzt, damit Flocken nicht beliebig schnell werden  
+Die Geschwindigkeit wird in alle Richtungen begrenzt, damit Flocken nicht beliebig schnell werden  
 und bei großen Zeitschritten tief in Kollisionsgeometrie eindringen könnten.  
 
 ### Schritt 6: Position aktualisieren und horizontaler Wrap-around
