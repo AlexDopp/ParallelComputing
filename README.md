@@ -5,6 +5,8 @@ Dieses Programm simuliert fallenden Schnee in einer 2D-Szene mit Haus und Baum.
 Es dient gleichzeitig als Benchmark, um den Leistungsunterschied zwischen einer reinen CPU-Simulation  
 und einer GPU-beschleunigten CUDA-Simulation zu vergleichen.  
 
+![Demo](https://github.com/user-attachments/assets/7d90e08f-8c69-4e9a-8b6f-6603b4bdde04)
+
 ## Das Koordinatensystem
 
 Die gesamte Szene ist in einem normalisierten Koordinatensystem definiert. Beide Achsen laufen von `0.0` bis `1.0`,  
