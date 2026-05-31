@@ -89,7 +89,7 @@ vx *= 0.98
 vy *= 0.99
 ```
 
-Jedes Frame wird die Geschwindigkeit um 2% (horizontal) bzw. 1% (vertikal) reduziert.  
+Pro Frame wird die Geschwindigkeit um 2% (horizontal) bzw. 1% (vertikal) reduziert.  
 Das modelliert den Luftwiderstand und regelt die ständige Windbeschleunigung herunter.
 
 ### Schritt 5: Geschwindigkeit begrenzen (Clamp)  
