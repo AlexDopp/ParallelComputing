@@ -30,8 +30,8 @@ struct Flake {
 `vx`, `vy` beinhält die Geschwindigkeit, welche zum Start zufällig aus den Bereichen [-0.0025, +0.0025], [-0.0035, -0.0015] gewählt wird.  
 Danach wird die Geschwindigkeit für jedes Frame angepasst durch Physik und Dämpfung nach folgender Formeln:  
 ```cpp
-vx += (personalWind + turbX) × dt
-vy -= GRAVITY × fallSpeed × dt + turbY × dt
+vx += (personalWind + turbX) * dt;
+vy -= GRAVITY * fallSpeed * dt + turbY * dt;
 ```
 `radius` beinhält den Kollisionsradius  
 
@@ -59,13 +59,13 @@ Die Funktion iteriert in einer for-Schleife sequenziell über alle Flocken und b
 Die folgenden Schritte werden für jede aktive Flocke in dieser Reihenfolge ausgeführt.  
 
 ### Schritt 1: Inaktive Flocken mit `spawnDelay` überspringen  
-```
+```cpp
 if(f.spawnDelay > 0.f){ f.spawnDelay -= dt; continue; }
 ```
 
 ### Schritt 2: Wind und Turbulenz berechnen  
 
-```
+```cpp
 personalWind = WIND_BASE * 0.1 + (random - 0.5) * WIND_BASE * 4.0;
 turbX        = (random - 0.5) * 0.003;
 turbY        = (random - 0.5) * 0.001;
@@ -77,14 +77,14 @@ Zusätzlich gibt es eine kleine zufällige Turbulenz in beide Richtungen (`turbX
 
 ### Schritt 3: Geschwindigkeit aktualisieren
 
-```
+```cpp
 vx += (personalWind + turbX) * dt;
 vy -= GRAVITY * fallSpeed * dt + turbY * dt;
 ```
 
 ### Schritt 4: Dämpfung (Luftwiderstand)
 
-```
+```cpp
 vx *= 0.98;
 vy *= 0.99;
 ```
@@ -94,7 +94,7 @@ Das modelliert den Luftwiderstand und regelt die ständige Windbeschleunigung he
 
 ### Schritt 5: Geschwindigkeit begrenzen (Clamp)  
 
-```
+```cpp
 float mvy = -0.003f * f.fallSpeed;
 if(f.vy < mvy) f.vy = mvy;
 if(f.vx >  0.004f) f.vx =  0.004f;
@@ -106,7 +106,7 @@ und bei großen Zeitschritten tief in Kollisionsgeometrie eindringen könnten.
 
 ### Schritt 6: Position aktualisieren und horizontaler Wrap-around
 
-```
+```cpp
 x += vx;
 y += vy;
 if(x < 0.0) x += 1.0;
@@ -137,7 +137,7 @@ Die Funktion `cpu_collideRoof` prüft alle Kanten des Dreiecks mit der Punkt-zu-
 und verwendet die nächste Kante für die Kollisionsauflösung.  
 
 ### Kollisionsauflösung
-```
+```cpp
 // Position korrigieren: Flocke entlang Normale um Eindringtiefe herausschieben
 x += normalX * penetration;
 y += normalY * penetration;
