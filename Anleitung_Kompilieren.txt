@@ -15,18 +15,16 @@ nvcc snow_simulation.cu -o snow_sim.exe ^
   -I"C:\vcpkg\installed\x64-windows\include" ^
   -L"C:\vcpkg\installed\x64-windows\lib" ^
   -lfreeglut -lglew32 -lopengl32 -lglu32 ^
-  -arch=sm_120
+  -arch=sm_75
 
 
 
+Kompilieren für Versionserstellung:
 
-
-Für Ubuntu:
-
-sudo apt install nvidia-cuda-toolkit freeglut3-dev libglew-dev
-
-nvcc snow_simulation.cu -o snow_sim \
-    -lGL -lGLU -lglut -lGLEW \
-    -arch=sm_86
-
-./snow_sim
+nvcc snow_simulation.cu -o snow_sim.exe ^
+    -I"C:\vcpkg\installed\x64-windows\include" ^
+    -L"C:\vcpkg\installed\x64-windows\lib" ^
+    -lfreeglut -lglew32 -lopengl32 -lglu32 ^
+    -arch=sm_75 ^
+    --cudart static
+Dazu freeglut.dll und glew32.dll im selben Ordner
