@@ -1,17 +1,16 @@
 /*
- * snow_simulation.cu
- *
- * CUDA C++ 2D Schnee-Simulation mit OpenGL-Rendering
- *
- * Kompilieren:
- *   nvcc snow_simulation.cu -o snow_sim \
- *       -lGL -lGLU -lglut -lGLEW \
- *       -arch=sm_75
- *
- * Steuerung:
- *   ESC / q  – Beenden
- *   r        – Restart
- */
+    Kompilieren in Windows mit x64 Native Tools von Visual Code
+ 
+    nvcc snow_simulation.cu -o snow_sim.exe ^
+        -I"C:\vcpkg\installed\x64-windows\include" ^
+        -L"C:\vcpkg\installed\x64-windows\lib" ^
+        -lfreeglut -lglew32 -lopengl32 -lglu32 ^
+        -arch=sm_120
+ 
+    Steuerung:
+        ESC / q  – Beenden
+        r        – Restart
+*/
 
 #include <GL/glew.h>
 #include <cuda_runtime.h>
@@ -30,9 +29,7 @@
 #include <random>
 #include <curand_kernel.h>
 
-// ─────────────────────────────────────────────────────────────────────────────
 //  Konfiguration
-// ─────────────────────────────────────────────────────────────────────────────
 static constexpr int   THREADS_PER_BLOCK = 128;
 static constexpr int   WIN_W             = 900;
 static constexpr int   WIN_H             = 700;
@@ -48,7 +45,7 @@ static       int g_flakeStepIdx  = 3;
 static       int g_numFlakes     = FLAKE_COUNTS[3];
 
 static bool g_uncapFps = false;
-static bool g_useCPU   = false;   // false = GPU (Standard)
+static bool g_useCPU   = false;
 
 #ifdef _WIN32
 typedef BOOL (WINAPI* PFNWGLSWAPINTERVALEXTPROC)(int);
@@ -62,9 +59,7 @@ static void applyVsync()
 #endif
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 //  Szenen-Geometrie
-// ─────────────────────────────────────────────────────────────────────────────
 static constexpr float GROUND_Y      = 0.12f;
 static constexpr float HOUSE_X0      = 0.42f;
 static constexpr float HOUSE_X1      = 0.74f;
@@ -91,14 +86,21 @@ __device__ __constant__ TriLayer TREE_LAYERS[3] = {
     { TREE_X-0.05f,  TREE_X+0.05f,  GROUND_Y+0.28f, GROUND_Y+0.44f },
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Flake
-// ─────────────────────────────────────────────────────────────────────────────
+// AABB-Geometrie im Constant Memory (Hauswand + Baumstamm)
+struct AABB { float x0, y0, x1, y1; };
+__device__ __constant__ AABB AABB_OBJECTS[2] = {
+    { HOUSE_X0, HOUSE_WALL_Y0, HOUSE_X1, HOUSE_WALL_Y1 },
+    { TREE_TRUNK_X0, TREE_TRUNK_Y0, TREE_TRUNK_X1, TREE_TRUNK_Y1 },
+};
+// Host-Spiegelung für CPU-Pfad
+static constexpr AABB AABB_OBJECTS_HOST[2] = {
+    { HOUSE_X0, HOUSE_WALL_Y0, HOUSE_X1, HOUSE_WALL_Y1 },
+    { TREE_TRUNK_X0, TREE_TRUNK_Y0, TREE_TRUNK_X1, TREE_TRUNK_Y1 },
+};
+
 struct Flake { float x,y,vx,vy,radius,spawnDelay,fallSpeed; };
 
-// ─────────────────────────────────────────────────────────────────────────────
 //  GPU: Device-Hilfsfunktionen
-// ─────────────────────────────────────────────────────────────────────────────
 __device__ float gpu_pointSegDist(float px,float py,float ax,float ay,float bx,float by,float&nx,float&ny)
 {
     float dx=bx-ax,dy=by-ay,len2=dx*dx+dy*dy,t=0.f;
@@ -120,12 +122,12 @@ __device__ bool gpu_collideRoof(float x,float y,float r,float lx,float ly,float 
         return true;}
     return false;
 }
-__device__ bool gpu_collideAABB(float x,float y,float r,float bx0,float by0,float bx1,float by1,float&nx,float&ny,float&pen)
+__device__ bool gpu_collideAABB(float x,float y,float r,const AABB&b,float&nx,float&ny,float&pen)
 {
-    float cx=fmaxf(bx0,fminf(x,bx1)),cy=fmaxf(by0,fminf(y,by1));
+    float cx=fmaxf(b.x0,fminf(x,b.x1)),cy=fmaxf(b.y0,fminf(y,b.y1));
     float dx=x-cx,dy=y-cy,dist=sqrtf(dx*dx+dy*dy);
     if(dist<1e-9f){
-        float dl=x-bx0,dr=bx1-x,db=y-by0,dt=by1-y,mn=fminf(fminf(dl,dr),fminf(db,dt));
+        float dl=x-b.x0,dr=b.x1-x,db=y-b.y0,dt=b.y1-y,mn=fminf(fminf(dl,dr),fminf(db,dt));
         if(mn==dl){nx=-1.f;ny=0.f;pen=r+dl;}
         else if(mn==dr){nx=1.f;ny=0.f;pen=r+dr;}
         else if(mn==db){nx=0.f;ny=-1.f;pen=r+db;}
@@ -147,9 +149,7 @@ __device__ bool gpu_insideHouseRoof(float x,float y)
     return gpu_pointInTri(x,y,HOUSE_X0+m,HOUSE_WALL_Y1,HOUSE_X1-m,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y-m);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  CPU: Host-Hilfsfunktionen  (identische Logik, kein __device__)
-// ─────────────────────────────────────────────────────────────────────────────
+//  CPU: Host-Hilfsfunktionen
 static inline float cpu_pointSegDist(float px,float py,float ax,float ay,float bx,float by,float&nx,float&ny)
 {
     float dx=bx-ax,dy=by-ay,len2=dx*dx+dy*dy,t=0.f;
@@ -171,12 +171,12 @@ static inline bool cpu_collideRoof(float x,float y,float r,float lx,float ly,flo
         return true;}
     return false;
 }
-static inline bool cpu_collideAABB(float x,float y,float r,float bx0,float by0,float bx1,float by1,float&nx,float&ny,float&pen)
+static inline bool cpu_collideAABB(float x,float y,float r,const AABB&b,float&nx,float&ny,float&pen)
 {
-    float cx=fmaxf(bx0,fminf(x,bx1)),cy=fmaxf(by0,fminf(y,by1));
+    float cx=fmaxf(b.x0,fminf(x,b.x1)),cy=fmaxf(b.y0,fminf(y,b.y1));
     float dx=x-cx,dy=y-cy,dist=sqrtf(dx*dx+dy*dy);
     if(dist<1e-9f){
-        float dl=x-bx0,dr=bx1-x,db=y-by0,dt=by1-y,mn=fminf(fminf(dl,dr),fminf(db,dt));
+        float dl=x-b.x0,dr=b.x1-x,db=y-b.y0,dt=b.y1-y,mn=fminf(fminf(dl,dr),fminf(db,dt));
         if(mn==dl){nx=-1.f;ny=0.f;pen=r+dl;}
         else if(mn==dr){nx=1.f;ny=0.f;pen=r+dr;}
         else if(mn==db){nx=0.f;ny=-1.f;pen=r+db;}
@@ -198,9 +198,7 @@ static inline bool cpu_insideHouseRoof(float x,float y)
     return cpu_pointInTri(x,y,HOUSE_X0+m,HOUSE_WALL_Y1,HOUSE_X1-m,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y-m);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 //  GPU-Kernel
-// ─────────────────────────────────────────────────────────────────────────────
 __global__ void initRngKernel(curandState*rng,int n,unsigned long long seed)
 {
     int id=blockIdx.x*blockDim.x+threadIdx.x;
@@ -224,7 +222,6 @@ __global__ void updateFlakesKernel(Flake*flakes,curandState*rng,int n,float dt,f
     if(id>=n)return;
     Flake f=flakes[id];
     curandState&r=rng[id];
-    if(f.x<-5.f)return;
     if(f.spawnDelay>0.f){f.spawnDelay-=dt;flakes[id]=f;return;}
 
     float pw=wind*0.1f+(curand_uniform(&r)-0.5f)*wind*4.f;
@@ -244,36 +241,31 @@ __global__ void updateFlakesKernel(Flake*flakes,curandState*rng,int n,float dt,f
         f.spawnDelay=curand_uniform(&r)*1.f;
         f.fallSpeed=1.f+(int)(curand_uniform(&r)*10.9999f)*0.05f;
     };
-    if(f.y<-0.02f){
-        if(curand_uniform(&r)<0.01f){f.x=-10.f;f.y=-10.f;f.vx=f.vy=0.f;f.spawnDelay=0.f;flakes[id]=f;return;}
-        respawn();flakes[id]=f;return;
-    }
+    if(f.y<-0.02f){ respawn();flakes[id]=f;return; }
+
     float nx,ny,pen,res=0.05f;
     auto resolve=[&](float cnx,float cny,float cpen){
         f.x+=cnx*cpen;f.y+=cny*cpen;
         float vn=f.vx*cnx+f.vy*cny;
         if(vn<0.f){f.vx-=(1.f+res)*vn*cnx;f.vy-=(1.f+res)*vn*cny;}
     };
-    for(int it=0;it<3;it++){
-        if(gpu_collideAABB(f.x,f.y,f.radius,HOUSE_X0,HOUSE_WALL_Y0,HOUSE_X1,HOUSE_WALL_Y1,nx,ny,pen))resolve(nx,ny,pen);
-        if(gpu_collideRoof(f.x,f.y,f.radius,HOUSE_X0,HOUSE_WALL_Y1,HOUSE_X1,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y,nx,ny,pen))resolve(nx,ny,pen);
-        if(gpu_collideAABB(f.x,f.y,f.radius,TREE_TRUNK_X0,TREE_TRUNK_Y0,TREE_TRUNK_X1,TREE_TRUNK_Y1,nx,ny,pen))resolve(nx,ny,pen);
-        for(int i=0;i<3;i++){const TriLayer&L=TREE_LAYERS[i];
-            if(gpu_collideRoof(f.x,f.y,f.radius,L.x0,L.yBase,L.x1,L.yBase,TREE_X,L.yTip,nx,ny,pen))resolve(nx,ny,pen);}
+
+    // Kollision: 1 Iteration, AABB aus Constant Memory
+    for(int i=0;i<2;i++){
+        if(gpu_collideAABB(f.x,f.y,f.radius,AABB_OBJECTS[i],nx,ny,pen))resolve(nx,ny,pen);
     }
+    if(gpu_collideRoof(f.x,f.y,f.radius,HOUSE_X0,HOUSE_WALL_Y1,HOUSE_X1,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y,nx,ny,pen))resolve(nx,ny,pen);
+    for(int i=0;i<3;i++){const TriLayer&L=TREE_LAYERS[i];
+        if(gpu_collideRoof(f.x,f.y,f.radius,L.x0,L.yBase,L.x1,L.yBase,TREE_X,L.yTip,nx,ny,pen))resolve(nx,ny,pen);}
+
     if(gpu_insideHouseRoof(f.x,f.y)){respawn();flakes[id]=f;return;}
     for(int i=0;i<3;i++){const TriLayer&L=TREE_LAYERS[i];float m=0.004f;
         if(gpu_pointInTri(f.x,f.y,L.x0+m,L.yBase,L.x1-m,L.yBase,TREE_X,L.yTip-m)){respawn();flakes[id]=f;return;}}
     flakes[id]=f;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  CPU-Update  (single-threaded, identische Physik)
-// ─────────────────────────────────────────────────────────────────────────────
-// Forward-Deklarationen damit cpuInitFlakes/cpuUpdateFlakes h_flakes kennen
+//  CPU  (single-threaded, identische Physik)
 static Flake*    h_flakes    = nullptr;
-
-// Pro Flocke ein LCG-State (64-bit, selbe Konstante wie CUDA)
 static uint64_t* h_rngStates = nullptr;
 
 static inline float lcgUniform(uint64_t& s)
@@ -302,7 +294,6 @@ static void cpuUpdateFlakes(float dt, float wind)
     for(int id=0;id<g_numFlakes;id++){
         Flake& f=h_flakes[id];
         uint64_t& s=h_rngStates[id];
-        if(f.x<-5.f)continue;
         if(f.spawnDelay>0.f){f.spawnDelay-=dt;continue;}
 
         float pw=wind*0.1f+(lcgUniform(s)-0.5f)*wind*4.f;
@@ -322,34 +313,31 @@ static void cpuUpdateFlakes(float dt, float wind)
             f.spawnDelay=lcgUniform(s)*1.f;
             f.fallSpeed=1.f+(int)(lcgUniform(s)*10.9999f)*0.05f;
         };
-        if(f.y<-0.02f){
-            if(lcgUniform(s)<0.01f){f.x=-10.f;f.y=-10.f;f.vx=f.vy=0.f;f.spawnDelay=0.f;continue;}
-            respawn();continue;
-        }
+        if(f.y<-0.02f){ respawn();continue; }
+
         float nx,ny,pen,res=0.05f;
         auto resolve=[&](float cnx,float cny,float cpen){
             f.x+=cnx*cpen;f.y+=cny*cpen;
             float vn=f.vx*cnx+f.vy*cny;
             if(vn<0.f){f.vx-=(1.f+res)*vn*cnx;f.vy-=(1.f+res)*vn*cny;}
         };
-        for(int it=0;it<3;it++){
-            if(cpu_collideAABB(f.x,f.y,f.radius,HOUSE_X0,HOUSE_WALL_Y0,HOUSE_X1,HOUSE_WALL_Y1,nx,ny,pen))resolve(nx,ny,pen);
-            if(cpu_collideRoof(f.x,f.y,f.radius,HOUSE_X0,HOUSE_WALL_Y1,HOUSE_X1,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y,nx,ny,pen))resolve(nx,ny,pen);
-            if(cpu_collideAABB(f.x,f.y,f.radius,TREE_TRUNK_X0,TREE_TRUNK_Y0,TREE_TRUNK_X1,TREE_TRUNK_Y1,nx,ny,pen))resolve(nx,ny,pen);
-            for(int i=0;i<3;i++){const TriLayer&L=TREE_LAYERS_HOST[i];
-                if(cpu_collideRoof(f.x,f.y,f.radius,L.x0,L.yBase,L.x1,L.yBase,TREE_X,L.yTip,nx,ny,pen))resolve(nx,ny,pen);}
+
+        // Kollision: 1 Iteration, AABB aus Host-Spiegelung
+        for(int i=0;i<2;i++){
+            if(cpu_collideAABB(f.x,f.y,f.radius,AABB_OBJECTS_HOST[i],nx,ny,pen))resolve(nx,ny,pen);
         }
+        if(cpu_collideRoof(f.x,f.y,f.radius,HOUSE_X0,HOUSE_WALL_Y1,HOUSE_X1,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y,nx,ny,pen))resolve(nx,ny,pen);
+        for(int i=0;i<3;i++){const TriLayer&L=TREE_LAYERS_HOST[i];
+            if(cpu_collideRoof(f.x,f.y,f.radius,L.x0,L.yBase,L.x1,L.yBase,TREE_X,L.yTip,nx,ny,pen))resolve(nx,ny,pen);}
+
         if(cpu_insideHouseRoof(f.x,f.y)){respawn();continue;}
         for(int i=0;i<3;i++){const TriLayer&L=TREE_LAYERS_HOST[i];float m=0.004f;
             if(cpu_pointInTri(f.x,f.y,L.x0+m,L.yBase,L.x1-m,L.yBase,TREE_X,L.yTip-m)){respawn();continue;}}
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 //  Host-Zustand
-// ─────────────────────────────────────────────────────────────────────────────
 static Flake*       d_flakes = nullptr;
-// h_flakes bereits oben vor CPU-Funktionen deklariert
 static curandState* d_rng    = nullptr;
 static int          g_frame  = 0;
 
@@ -362,12 +350,9 @@ static int   g_perfFrameAcc=0,g_perfTimeAcc=0;
 static cudaEvent_t g_evFrameStart=nullptr,g_evFrameStop=nullptr;
 static cudaEvent_t g_evKernelStart=nullptr,g_evKernelStop=nullptr;
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Allokation / Init  (GPU oder CPU je nach Flag)
-// ─────────────────────────────────────────────────────────────────────────────
+//  Allokation des Speichers und Initialisierung
 static void allocAndInit()
 {
-    // Aufräumen
     if(d_flakes){cudaFree(d_flakes);d_flakes=nullptr;}
     if(d_rng)   {cudaFree(d_rng);   d_rng=nullptr;}
     if(h_flakes){delete[]h_flakes;  h_flakes=nullptr;}
@@ -376,11 +361,9 @@ static void allocAndInit()
     h_flakes = new Flake[g_numFlakes];
 
     if(g_useCPU){
-        // CPU-Pfad: nur Host-Speicher
         h_rngStates = new uint64_t[g_numFlakes];
         cpuInitFlakes();
     } else {
-        // GPU-Pfad
         cudaMalloc(&d_flakes,g_numFlakes*sizeof(Flake));
         cudaMalloc(&d_rng,   g_numFlakes*sizeof(curandState));
         int blocks=(g_numFlakes+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK;
@@ -399,9 +382,7 @@ static void allocAndInit()
     g_kernelMsAcc=0.f; g_frameMsAcc=0.f; g_perfFrameAcc=0; g_perfTimeAcc=0;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 //  OpenGL-Helfer
-// ─────────────────────────────────────────────────────────────────────────────
 static void glowLine(float x0,float y0,float x1,float y1,float r,float g,float b)
 {
     glLineWidth(6.f);glColor4f(r,g,b,0.08f);glBegin(GL_LINES);glVertex2f(x0,y0);glVertex2f(x1,y1);glEnd();
@@ -425,7 +406,6 @@ static void fillPx(float x0,float y0,float x1,float y1)
 static void strokePx(float x0,float y0,float x1,float y1)
 {glBegin(GL_LINE_LOOP);glVertex2f(x0,y0);glVertex2f(x1,y0);glVertex2f(x1,y1);glVertex2f(x0,y1);glEnd();}
 
-// Einfacher Toggle-Switch (für FPS Uncap)
 static void drawSwitch(float cx,float cy,bool on)
 {
     float hw=18.f,hh=8.f;
@@ -438,31 +418,25 @@ static void drawSwitch(float cx,float cy,bool on)
     fillPx(kx-kr,cy-kr,kx+kr,cy+kr);
 }
 
-// CPU/GPU-Switch: nur Track + Knob, Labels werden außen in drawMenu gezeichnet
-// g_cpuGpuLockUntil: glutGet-Zeitstempel bis zu dem der Switch gesperrt ist
 static int g_cpuGpuLockUntil = 0;
 
 static void drawCpuGpuSwitch(float cx, float cy)
 {
     float hw=18.f, hh=9.f;
     float x0=cx-hw,y0=cy-hh,x1=cx+hw,y1=cy+hh;
-
     bool locked = (glutGet(GLUT_ELAPSED_TIME) < g_cpuGpuLockUntil);
     float dim = locked ? 0.5f : 1.0f;
     if(g_useCPU) glColor4f(0.7f*dim,0.35f*dim,0.05f*dim,0.85f);
     else         glColor4f(0.1f*dim,0.35f*dim,0.75f*dim,0.85f);
     fillPx(x0,y0,x1,y1);
     glColor4f(0.6f,0.6f,0.9f,0.7f); strokePx(x0,y0,x1,y1);
-
     float kx = g_useCPU ? cx+hw-hh : cx-hw+hh;
     float kr  = hh-1.5f;
     glColor4f(dim,dim,dim,0.95f);
     fillPx(kx-kr,cy-kr,kx+kr,cy+kr);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 //  Menü-Layout
-// ─────────────────────────────────────────────────────────────────────────────
 static constexpr float MX=8.f,MY=8.f,MW=230.f;
 
 static constexpr float ROW_TITLE  = MY+18.f;
@@ -483,9 +457,7 @@ static constexpr float BTN_Y0=ROW_BTN-12.f,BTN_Y1=ROW_BTN+12.f;
 static constexpr float STEP_Y0=ROW_STEPS-10.f,STEP_Y1=ROW_STEPS+10.f;
 static constexpr float STEP_W=(MW-16.f)/NUM_FLAKE_STEPS;
 
-// Switch-Mittelpunkte
 static constexpr float SW_UNCAP_CX  = MX+MW-26.f,  SW_UNCAP_CY  = ROW_UNCAP;
-// CPU/GPU-Switch: mittig im Panel, Platz für Labels links ("GPU") und rechts ("CPU")
 static constexpr float SW_CPUGPU_CX = MX+MW/2.f,   SW_CPUGPU_CY = ROW_CPUGPU;
 
 static bool inRect(float mx,float my,float x0,float y0,float x1,float y1)
@@ -495,9 +467,7 @@ static bool inStep(float mx,float my,int i)
 static bool inSwitch(float mx,float my,float cx,float cy,float hw,float hh)
 {return inRect(mx,my,cx-hw,cy-hh,cx+hw,cy+hh);}
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Menü zeichnen
-// ─────────────────────────────────────────────────────────────────────────────
+//  Menü oben links
 static void drawMenu()
 {
     setPixelProj();
@@ -509,59 +479,43 @@ static void drawMenu()
 
     char buf[80];
 
-    // Titel
     glColor4f(0.6f,0.8f,1.f,1.f);
     drawText(MX+8.f,ROW_TITLE+4.f,"CUDA Snow Sim",GLUT_BITMAP_8_BY_13);
 
-    // FPS
     snprintf(buf,sizeof(buf),"FPS:    %.1f",g_fps);
     glColor4f(0.4f,1.f,0.5f,1.f);
     drawText(MX+8.f,ROW_FPS+4.f,buf,GLUT_BITMAP_8_BY_13);
 
-    // Kernel
     snprintf(buf,sizeof(buf),"Kernel: %.3f ms",g_kernelMs);
     glColor4f(1.f,0.75f,0.2f,1.f);
     drawText(MX+8.f,ROW_KERNEL+4.f,buf,GLUT_BITMAP_8_BY_13);
 
-    // Frame
     snprintf(buf,sizeof(buf),"Frame:  %.3f ms",g_frameMs);
     glColor4f(1.f,0.45f,0.45f,1.f);
     drawText(MX+8.f,ROW_FRAME+4.f,buf,GLUT_BITMAP_8_BY_13);
 
-    // Trennlinie 1
     glColor4f(0.3f,0.4f,0.7f,0.5f);
     glBegin(GL_LINES);glVertex2f(MX+6.f,ROW_DIV1);glVertex2f(MX+MW-6.f,ROW_DIV1);glEnd();
 
-    // FPS Uncapped
     glColor4f(0.85f,0.85f,0.85f,1.f);
     drawText(MX+8.f,ROW_UNCAP+4.f,"FPS Uncapped",GLUT_BITMAP_8_BY_13);
     drawSwitch(SW_UNCAP_CX,SW_UNCAP_CY,g_uncapFps);
 
-    // CPU/GPU Switch – Label "GPU" links, Switch mittig, "CPU" rechts
     {
-        bool locked=(glutGet(GLUT_ELAPSED_TIME)<g_cpuGpuLockUntil);
-        // "GPU" links vom Switch
         glColor4f(g_useCPU?0.45f:1.f, g_useCPU?0.45f:1.f, g_useCPU?0.45f:1.f, 1.f);
         drawText(SW_CPUGPU_CX-18.f-28.f, ROW_CPUGPU+4.f, "GPU", GLUT_BITMAP_8_BY_13);
-        // Switch selbst
         drawCpuGpuSwitch(SW_CPUGPU_CX,SW_CPUGPU_CY);
-        // "CPU" rechts vom Switch
         glColor4f(g_useCPU?1.f:0.45f, g_useCPU?0.85f:0.45f, g_useCPU?0.45f:0.45f, 1.f);
-        drawText(SW_CPUGPU_CX+18.f+4.f,  ROW_CPUGPU+4.f, "CPU", GLUT_BITMAP_8_BY_13);
-        // Lock-Hinweis (kleines "..." wenn gesperrt)
-        if(locked){ glColor4f(0.6f,0.6f,0.6f,0.8f); drawText(SW_CPUGPU_CX-6.f,ROW_CPUGPU+4.f,"...",GLUT_BITMAP_8_BY_13); }
+        drawText(SW_CPUGPU_CX+18.f+4.f, ROW_CPUGPU+4.f, "CPU", GLUT_BITMAP_8_BY_13);
     }
 
-    // Trennlinie 2
     glColor4f(0.3f,0.4f,0.7f,0.5f);
     glBegin(GL_LINES);glVertex2f(MX+6.f,ROW_DIV2);glVertex2f(MX+MW-6.f,ROW_DIV2);glEnd();
 
-    // Flocken
     snprintf(buf,sizeof(buf),"Flakes: %d",g_numFlakes);
     glColor4f(0.9f,0.9f,0.9f,1.f);
     drawText(MX+8.f,ROW_FLAKES+4.f,buf,GLUT_BITMAP_8_BY_13);
 
-    // Stufen-Leiste
     static const char*labels[]={"512","1k","2k","4k","8k","16k"};
     for(int i=0;i<NUM_FLAKE_STEPS;i++){
         float x0=MX+8.f+i*STEP_W,x1=x0+STEP_W-2.f;
@@ -574,7 +528,6 @@ static void drawMenu()
         drawText(x0+2.f,STEP_Y0+13.f,labels[i],GLUT_BITMAP_8_BY_13);
     }
 
-    // Restart
     glColor4f(0.15f,0.45f,0.15f,0.88f); fillPx(BTN_X0,BTN_Y0,BTN_X1,BTN_Y1);
     glColor4f(0.35f,1.f,0.35f,1.f);     strokePx(BTN_X0,BTN_Y0,BTN_X1,BTN_Y1);
     glColor4f(1.f,1.f,1.f,1.f);
@@ -584,9 +537,7 @@ static void drawMenu()
     setSceneProj();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 //  Szene zeichnen
-// ─────────────────────────────────────────────────────────────────────────────
 static void drawScene()
 {
     glColor4f(0.f,0.f,0.f,1.f);
@@ -604,18 +555,16 @@ static void drawScene()
     glEnable(GL_POINT_SMOOTH);
     glPointSize(7.f);glBegin(GL_POINTS);
     for(int i=0;i<g_numFlakes;i++){const Flake&f=h_flakes[i];
-        if(f.x<-5.f||f.spawnDelay>0.f)continue;glColor4f(0.7f,0.92f,1.f,0.12f);glVertex2f(f.x,f.y);}glEnd();
+        if(f.spawnDelay>0.f)continue;glColor4f(0.7f,0.92f,1.f,0.12f);glVertex2f(f.x,f.y);}glEnd();
     glPointSize(4.f);glBegin(GL_POINTS);
     for(int i=0;i<g_numFlakes;i++){const Flake&f=h_flakes[i];
-        if(f.x<-5.f||f.spawnDelay>0.f)continue;glColor4f(0.8f,0.95f,1.f,0.35f);glVertex2f(f.x,f.y);}glEnd();
+        if(f.spawnDelay>0.f)continue;glColor4f(0.8f,0.95f,1.f,0.35f);glVertex2f(f.x,f.y);}glEnd();
     glPointSize(2.f);glBegin(GL_POINTS);
     for(int i=0;i<g_numFlakes;i++){const Flake&f=h_flakes[i];
-        if(f.x<-5.f||f.spawnDelay>0.f)continue;glColor4f(1.f,1.f,1.f,0.95f);glVertex2f(f.x,f.y);}glEnd();
+        if(f.spawnDelay>0.f)continue;glColor4f(1.f,1.f,1.f,0.95f);glVertex2f(f.x,f.y);}glEnd();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 //  GLUT-Callbacks
-// ─────────────────────────────────────────────────────────────────────────────
 static void doRestart()
 {
     g_numFlakes=FLAKE_COUNTS[g_flakeStepIdx];
@@ -627,16 +576,13 @@ static void display()
     float kMs=0.f,fMs=0.f;
 
     if(g_useCPU){
-        // CPU-Pfad: chrono für Zeitmessung
         auto t0=std::chrono::high_resolution_clock::now();
         cpuUpdateFlakes(DT,WIND_BASE);
         auto t1=std::chrono::high_resolution_clock::now();
-        // h_flakes ist bereits aktuell – kein Memcpy nötig
         auto t2=std::chrono::high_resolution_clock::now();
         kMs=(float)std::chrono::duration_cast<std::chrono::microseconds>(t1-t0).count()/1000.f;
         fMs=(float)std::chrono::duration_cast<std::chrono::microseconds>(t2-t0).count()/1000.f;
     } else {
-        // GPU-Pfad: CUDA-Events
         int blocks=(g_numFlakes+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK;
         cudaEventRecord(g_evFrameStart);
         cudaEventRecord(g_evKernelStart);
@@ -649,7 +595,6 @@ static void display()
         cudaEventElapsedTime(&fMs,g_evFrameStart, g_evFrameStop);
     }
 
-    // 1-Sekunden-Akkumulation
     static int lastTime=0;
     int now=glutGet(GLUT_ELAPSED_TIME);
     int dtMs=now-lastTime; lastTime=now;
@@ -679,22 +624,18 @@ static void mouse(int button,int state,int mx,int my)
     if(button!=GLUT_LEFT_BUTTON||state!=GLUT_DOWN)return;
     float fx=(float)mx,fy=(float)my;
 
-    // FPS Uncap
     if(inSwitch(fx,fy,SW_UNCAP_CX,SW_UNCAP_CY,18.f,8.f)){
         g_uncapFps=!g_uncapFps; applyVsync(); return;
     }
-    // CPU/GPU Switch – Klick nur wenn nicht gelockt
     if(inSwitch(fx,fy,SW_CPUGPU_CX,SW_CPUGPU_CY,18.f,9.f)){
         if(glutGet(GLUT_ELAPSED_TIME) >= g_cpuGpuLockUntil){
             g_useCPU=!g_useCPU;
-            g_cpuGpuLockUntil=glutGet(GLUT_ELAPSED_TIME)+1000; // 1 Sekunde Lock
+            g_cpuGpuLockUntil=glutGet(GLUT_ELAPSED_TIME)+1000;
             doRestart();
         }
         return;
     }
-    // Stufen
     for(int i=0;i<NUM_FLAKE_STEPS;i++) if(inStep(fx,fy,i)){g_flakeStepIdx=i;return;}
-    // Restart
     if(inRect(fx,fy,BTN_X0,BTN_Y0,BTN_X1,BTN_Y1)){doRestart();return;}
 }
 
@@ -712,9 +653,6 @@ static void keyboard(unsigned char key,int,int)
 
 static void reshape(int w,int h){glViewport(0,0,w,h);}
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  main
-// ─────────────────────────────────────────────────────────────────────────────
 int main(int argc,char**argv)
 {
     int dc=0; cudaGetDeviceCount(&dc);
@@ -741,7 +679,7 @@ int main(int argc,char**argv)
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
 
-    allocAndInit();   // startet im GPU-Modus
+    allocAndInit();
 
     glutDisplayFunc(display);
     glutIdleFunc(idle);
