@@ -8,9 +8,6 @@
  *       -lGL -lGLU -lglut -lGLEW \
  *       -arch=sm_75
  *
- * Abhängigkeiten:
- *   sudo apt install freeglut3-dev libglew-dev
- *
  * Steuerung:
  *   ESC / q  – Beenden
  *   r        – Restart
@@ -29,6 +26,8 @@
 #include <cstdlib>
 #include <cmath>
 #include <ctime>
+#include <chrono>
+#include <random>
 #include <curand_kernel.h>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,6 +46,21 @@ static const int FLAKE_COUNTS[]  = { 512, 1024, 2048, 4096, 8192, 16384 };
 static const int NUM_FLAKE_STEPS = 6;
 static       int g_flakeStepIdx  = 3;
 static       int g_numFlakes     = FLAKE_COUNTS[3];
+
+static bool g_uncapFps = false;
+static bool g_useCPU   = false;   // false = GPU (Standard)
+
+#ifdef _WIN32
+typedef BOOL (WINAPI* PFNWGLSWAPINTERVALEXTPROC)(int);
+static PFNWGLSWAPINTERVALEXTPROC g_wglSwapInterval = nullptr;
+#endif
+
+static void applyVsync()
+{
+#ifdef _WIN32
+    if(g_wglSwapInterval) g_wglSwapInterval(g_uncapFps ? 0 : 1);
+#endif
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Szenen-Geometrie
@@ -80,14 +94,12 @@ __device__ __constant__ TriLayer TREE_LAYERS[3] = {
 // ─────────────────────────────────────────────────────────────────────────────
 //  Flake
 // ─────────────────────────────────────────────────────────────────────────────
-struct Flake {
-    float x, y, vx, vy, radius, spawnDelay, fallSpeed;
-};
+struct Flake { float x,y,vx,vy,radius,spawnDelay,fallSpeed; };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Device-Hilfsfunktionen
+//  GPU: Device-Hilfsfunktionen
 // ─────────────────────────────────────────────────────────────────────────────
-__device__ float pointSegmentDist(float px,float py,float ax,float ay,float bx,float by,float&nx,float&ny)
+__device__ float gpu_pointSegDist(float px,float py,float ax,float ay,float bx,float by,float&nx,float&ny)
 {
     float dx=bx-ax,dy=by-ay,len2=dx*dx+dy*dy,t=0.f;
     if(len2>1e-9f) t=fminf(1.f,fmaxf(0.f,((px-ax)*dx+(py-ay)*dy)/len2));
@@ -95,11 +107,11 @@ __device__ float pointSegmentDist(float px,float py,float ax,float ay,float bx,f
     if(d>1e-9f){nx=ex/d;ny=ey/d;}else{nx=0.f;ny=1.f;}
     return d;
 }
-__device__ bool collideRoof(float x,float y,float r,float lx,float ly,float rx2,float ry,float px,float py,float&nx,float&ny,float&pen)
+__device__ bool gpu_collideRoof(float x,float y,float r,float lx,float ly,float rx2,float ry,float px,float py,float&nx,float&ny,float&pen)
 {
-    float n1x,n1y,d1=pointSegmentDist(x,y,lx,ly,px,py,n1x,n1y);
-    float n2x,n2y,d2=pointSegmentDist(x,y,rx2,ry,px,py,n2x,n2y);
-    float n3x,n3y,d3=pointSegmentDist(x,y,lx,ly,rx2,ry,n3x,n3y);
+    float n1x,n1y,d1=gpu_pointSegDist(x,y,lx,ly,px,py,n1x,n1y);
+    float n2x,n2y,d2=gpu_pointSegDist(x,y,rx2,ry,px,py,n2x,n2y);
+    float n3x,n3y,d3=gpu_pointSegDist(x,y,lx,ly,rx2,ry,n3x,n3y);
     float d=fminf(fminf(d1,d2),d3);
     if(d<r){pen=r-d;
         if(d<=d2&&d<=d3){nx=n1x;ny=n1y;}
@@ -108,7 +120,7 @@ __device__ bool collideRoof(float x,float y,float r,float lx,float ly,float rx2,
         return true;}
     return false;
 }
-__device__ bool collideAABB(float x,float y,float r,float bx0,float by0,float bx1,float by1,float&nx,float&ny,float&pen)
+__device__ bool gpu_collideAABB(float x,float y,float r,float bx0,float by0,float bx1,float by1,float&nx,float&ny,float&pen)
 {
     float cx=fmaxf(bx0,fminf(x,bx1)),cy=fmaxf(by0,fminf(y,by1));
     float dx=x-cx,dy=y-cy,dist=sqrtf(dx*dx+dy*dy);
@@ -122,21 +134,72 @@ __device__ bool collideAABB(float x,float y,float r,float bx0,float by0,float bx
     if(dist<r){pen=r-dist;nx=dx/dist;ny=dy/dist;return true;}
     return false;
 }
-__device__ bool pointInTriangle(float px,float py,float ax,float ay,float bx,float by,float cx,float cy)
+__device__ bool gpu_pointInTri(float px,float py,float ax,float ay,float bx,float by,float cx,float cy)
 {
     float d1=(px-bx)*(ay-by)-(ax-bx)*(py-by);
     float d2=(px-cx)*(by-cy)-(bx-cx)*(py-cy);
     float d3=(px-ax)*(cy-ay)-(cx-ax)*(py-ay);
     return !((d1<0||d2<0||d3<0)&&(d1>0||d2>0||d3>0));
 }
-__device__ bool insideHouseRoof(float x,float y)
+__device__ bool gpu_insideHouseRoof(float x,float y)
 {
     float m=0.003f;
-    return pointInTriangle(x,y,HOUSE_X0+m,HOUSE_WALL_Y1,HOUSE_X1-m,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y-m);
+    return gpu_pointInTri(x,y,HOUSE_X0+m,HOUSE_WALL_Y1,HOUSE_X1-m,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y-m);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Kernel
+//  CPU: Host-Hilfsfunktionen  (identische Logik, kein __device__)
+// ─────────────────────────────────────────────────────────────────────────────
+static inline float cpu_pointSegDist(float px,float py,float ax,float ay,float bx,float by,float&nx,float&ny)
+{
+    float dx=bx-ax,dy=by-ay,len2=dx*dx+dy*dy,t=0.f;
+    if(len2>1e-9f) t=fminf(1.f,fmaxf(0.f,((px-ax)*dx+(py-ay)*dy)/len2));
+    float cx=ax+t*dx,cy=ay+t*dy,ex=px-cx,ey=py-cy,d=sqrtf(ex*ex+ey*ey);
+    if(d>1e-9f){nx=ex/d;ny=ey/d;}else{nx=0.f;ny=1.f;}
+    return d;
+}
+static inline bool cpu_collideRoof(float x,float y,float r,float lx,float ly,float rx2,float ry,float px,float py,float&nx,float&ny,float&pen)
+{
+    float n1x,n1y,d1=cpu_pointSegDist(x,y,lx,ly,px,py,n1x,n1y);
+    float n2x,n2y,d2=cpu_pointSegDist(x,y,rx2,ry,px,py,n2x,n2y);
+    float n3x,n3y,d3=cpu_pointSegDist(x,y,lx,ly,rx2,ry,n3x,n3y);
+    float d=fminf(fminf(d1,d2),d3);
+    if(d<r){pen=r-d;
+        if(d<=d2&&d<=d3){nx=n1x;ny=n1y;}
+        else if(d2<=d1&&d2<=d3){nx=n2x;ny=n2y;}
+        else{nx=n3x;ny=n3y;}
+        return true;}
+    return false;
+}
+static inline bool cpu_collideAABB(float x,float y,float r,float bx0,float by0,float bx1,float by1,float&nx,float&ny,float&pen)
+{
+    float cx=fmaxf(bx0,fminf(x,bx1)),cy=fmaxf(by0,fminf(y,by1));
+    float dx=x-cx,dy=y-cy,dist=sqrtf(dx*dx+dy*dy);
+    if(dist<1e-9f){
+        float dl=x-bx0,dr=bx1-x,db=y-by0,dt=by1-y,mn=fminf(fminf(dl,dr),fminf(db,dt));
+        if(mn==dl){nx=-1.f;ny=0.f;pen=r+dl;}
+        else if(mn==dr){nx=1.f;ny=0.f;pen=r+dr;}
+        else if(mn==db){nx=0.f;ny=-1.f;pen=r+db;}
+        else{nx=0.f;ny=1.f;pen=r+dt;}
+        return true;}
+    if(dist<r){pen=r-dist;nx=dx/dist;ny=dy/dist;return true;}
+    return false;
+}
+static inline bool cpu_pointInTri(float px,float py,float ax,float ay,float bx,float by,float cx,float cy)
+{
+    float d1=(px-bx)*(ay-by)-(ax-bx)*(py-by);
+    float d2=(px-cx)*(by-cy)-(bx-cx)*(py-cy);
+    float d3=(px-ax)*(cy-ay)-(cx-ax)*(py-ay);
+    return !((d1<0||d2<0||d3<0)&&(d1>0||d2>0||d3>0));
+}
+static inline bool cpu_insideHouseRoof(float x,float y)
+{
+    float m=0.003f;
+    return cpu_pointInTri(x,y,HOUSE_X0+m,HOUSE_WALL_Y1,HOUSE_X1-m,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y-m);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GPU-Kernel
 // ─────────────────────────────────────────────────────────────────────────────
 __global__ void initRngKernel(curandState*rng,int n,unsigned long long seed)
 {
@@ -181,12 +244,10 @@ __global__ void updateFlakesKernel(Flake*flakes,curandState*rng,int n,float dt,f
         f.spawnDelay=curand_uniform(&r)*1.f;
         f.fallSpeed=1.f+(int)(curand_uniform(&r)*10.9999f)*0.05f;
     };
-
     if(f.y<-0.02f){
         if(curand_uniform(&r)<0.01f){f.x=-10.f;f.y=-10.f;f.vx=f.vy=0.f;f.spawnDelay=0.f;flakes[id]=f;return;}
         respawn();flakes[id]=f;return;
     }
-
     float nx,ny,pen,res=0.05f;
     auto resolve=[&](float cnx,float cny,float cpen){
         f.x+=cnx*cpen;f.y+=cny*cpen;
@@ -194,70 +255,148 @@ __global__ void updateFlakesKernel(Flake*flakes,curandState*rng,int n,float dt,f
         if(vn<0.f){f.vx-=(1.f+res)*vn*cnx;f.vy-=(1.f+res)*vn*cny;}
     };
     for(int it=0;it<3;it++){
-        if(collideAABB(f.x,f.y,f.radius,HOUSE_X0,HOUSE_WALL_Y0,HOUSE_X1,HOUSE_WALL_Y1,nx,ny,pen))resolve(nx,ny,pen);
-        if(collideRoof(f.x,f.y,f.radius,HOUSE_X0,HOUSE_WALL_Y1,HOUSE_X1,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y,nx,ny,pen))resolve(nx,ny,pen);
-        if(collideAABB(f.x,f.y,f.radius,TREE_TRUNK_X0,TREE_TRUNK_Y0,TREE_TRUNK_X1,TREE_TRUNK_Y1,nx,ny,pen))resolve(nx,ny,pen);
+        if(gpu_collideAABB(f.x,f.y,f.radius,HOUSE_X0,HOUSE_WALL_Y0,HOUSE_X1,HOUSE_WALL_Y1,nx,ny,pen))resolve(nx,ny,pen);
+        if(gpu_collideRoof(f.x,f.y,f.radius,HOUSE_X0,HOUSE_WALL_Y1,HOUSE_X1,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y,nx,ny,pen))resolve(nx,ny,pen);
+        if(gpu_collideAABB(f.x,f.y,f.radius,TREE_TRUNK_X0,TREE_TRUNK_Y0,TREE_TRUNK_X1,TREE_TRUNK_Y1,nx,ny,pen))resolve(nx,ny,pen);
         for(int i=0;i<3;i++){const TriLayer&L=TREE_LAYERS[i];
-            if(collideRoof(f.x,f.y,f.radius,L.x0,L.yBase,L.x1,L.yBase,TREE_X,L.yTip,nx,ny,pen))resolve(nx,ny,pen);}
+            if(gpu_collideRoof(f.x,f.y,f.radius,L.x0,L.yBase,L.x1,L.yBase,TREE_X,L.yTip,nx,ny,pen))resolve(nx,ny,pen);}
     }
-    if(insideHouseRoof(f.x,f.y)){respawn();flakes[id]=f;return;}
+    if(gpu_insideHouseRoof(f.x,f.y)){respawn();flakes[id]=f;return;}
     for(int i=0;i<3;i++){const TriLayer&L=TREE_LAYERS[i];float m=0.004f;
-        if(pointInTriangle(f.x,f.y,L.x0+m,L.yBase,L.x1-m,L.yBase,TREE_X,L.yTip-m)){respawn();flakes[id]=f;return;}}
+        if(gpu_pointInTri(f.x,f.y,L.x0+m,L.yBase,L.x1-m,L.yBase,TREE_X,L.yTip-m)){respawn();flakes[id]=f;return;}}
     flakes[id]=f;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CPU-Update  (single-threaded, identische Physik)
+// ─────────────────────────────────────────────────────────────────────────────
+// Forward-Deklarationen damit cpuInitFlakes/cpuUpdateFlakes h_flakes kennen
+static Flake*    h_flakes    = nullptr;
+
+// Pro Flocke ein LCG-State (64-bit, selbe Konstante wie CUDA)
+static uint64_t* h_rngStates = nullptr;
+
+static inline float lcgUniform(uint64_t& s)
+{
+    s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+    return (float)((s >> 33) & 0x7FFFFFFF) / (float)0x7FFFFFFF;
+}
+
+static void cpuInitFlakes()
+{
+    uint64_t seed = (uint64_t)time(nullptr);
+    for(int id=0;id<g_numFlakes;id++){
+        h_rngStates[id] = seed + (uint64_t)id * 6364136223846793005ULL;
+        uint64_t& s = h_rngStates[id];
+        int step=(int)(lcgUniform(s)*10.9999f);
+        h_flakes[id]={lcgUniform(s),lcgUniform(s),
+                      (lcgUniform(s)-0.5f)*0.005f,
+                      -(lcgUniform(s)*0.002f+0.0015f),
+                      FLAKE_RADIUS*(0.6f+lcgUniform(s)*0.8f),
+                      0.f, 1.f+step*0.05f};
+    }
+}
+
+static void cpuUpdateFlakes(float dt, float wind)
+{
+    for(int id=0;id<g_numFlakes;id++){
+        Flake& f=h_flakes[id];
+        uint64_t& s=h_rngStates[id];
+        if(f.x<-5.f)continue;
+        if(f.spawnDelay>0.f){f.spawnDelay-=dt;continue;}
+
+        float pw=wind*0.1f+(lcgUniform(s)-0.5f)*wind*4.f;
+        float tx=(lcgUniform(s)-0.5f)*0.003f,ty=(lcgUniform(s)-0.5f)*0.001f;
+        f.vx+=(pw+tx)*dt; f.vy-=GRAVITY*f.fallSpeed*dt+ty*dt;
+        f.vx*=0.98f; f.vy*=0.99f;
+        float mvy=-0.003f*f.fallSpeed;
+        if(f.vy<mvy)f.vy=mvy;
+        if(f.vx>0.004f)f.vx=0.004f; if(f.vx<-0.004f)f.vx=-0.004f;
+        f.x+=f.vx; f.y+=f.vy;
+        if(f.x<0.f)f.x+=1.f; if(f.x>1.f)f.x-=1.f;
+
+        auto respawn=[&](){
+            f.x=lcgUniform(s);f.y=1.02f;
+            f.vx=(lcgUniform(s)-0.5f)*0.005f;
+            f.vy=-(lcgUniform(s)*0.002f+0.0015f);
+            f.spawnDelay=lcgUniform(s)*1.f;
+            f.fallSpeed=1.f+(int)(lcgUniform(s)*10.9999f)*0.05f;
+        };
+        if(f.y<-0.02f){
+            if(lcgUniform(s)<0.01f){f.x=-10.f;f.y=-10.f;f.vx=f.vy=0.f;f.spawnDelay=0.f;continue;}
+            respawn();continue;
+        }
+        float nx,ny,pen,res=0.05f;
+        auto resolve=[&](float cnx,float cny,float cpen){
+            f.x+=cnx*cpen;f.y+=cny*cpen;
+            float vn=f.vx*cnx+f.vy*cny;
+            if(vn<0.f){f.vx-=(1.f+res)*vn*cnx;f.vy-=(1.f+res)*vn*cny;}
+        };
+        for(int it=0;it<3;it++){
+            if(cpu_collideAABB(f.x,f.y,f.radius,HOUSE_X0,HOUSE_WALL_Y0,HOUSE_X1,HOUSE_WALL_Y1,nx,ny,pen))resolve(nx,ny,pen);
+            if(cpu_collideRoof(f.x,f.y,f.radius,HOUSE_X0,HOUSE_WALL_Y1,HOUSE_X1,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y,nx,ny,pen))resolve(nx,ny,pen);
+            if(cpu_collideAABB(f.x,f.y,f.radius,TREE_TRUNK_X0,TREE_TRUNK_Y0,TREE_TRUNK_X1,TREE_TRUNK_Y1,nx,ny,pen))resolve(nx,ny,pen);
+            for(int i=0;i<3;i++){const TriLayer&L=TREE_LAYERS_HOST[i];
+                if(cpu_collideRoof(f.x,f.y,f.radius,L.x0,L.yBase,L.x1,L.yBase,TREE_X,L.yTip,nx,ny,pen))resolve(nx,ny,pen);}
+        }
+        if(cpu_insideHouseRoof(f.x,f.y)){respawn();continue;}
+        for(int i=0;i<3;i++){const TriLayer&L=TREE_LAYERS_HOST[i];float m=0.004f;
+            if(cpu_pointInTri(f.x,f.y,L.x0+m,L.yBase,L.x1-m,L.yBase,TREE_X,L.yTip-m)){respawn();continue;}}
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Host-Zustand
 // ─────────────────────────────────────────────────────────────────────────────
 static Flake*       d_flakes = nullptr;
-static Flake*       h_flakes = nullptr;
+// h_flakes bereits oben vor CPU-Funktionen deklariert
 static curandState* d_rng    = nullptr;
 static int          g_frame  = 0;
 
 // Performance
-static float g_fps        = 0.f;
-static float g_kernelMs   = 0.f;   // Kernel-Zeit (geglättet)
-static float g_frameMs    = 0.f;   // gesamte Frame-Zeit (geglättet)
-static int   g_fpsFrameAcc = 0;
-static int   g_fpsTimeAcc  = 0;
+static float g_fps=0.f,g_kernelMs=0.f,g_frameMs=0.f;
+static float g_kernelMsAcc=0.f,g_frameMsAcc=0.f;
+static int   g_perfFrameAcc=0,g_perfTimeAcc=0;
 
-// CUDA-Events:
-//   evFrameStart/Stop  → gesamte Frame-Zeit (Kernel + Memcpy)
-//   evKernelStart/Stop → nur Kernel
-static cudaEvent_t g_evFrameStart  = nullptr;
-static cudaEvent_t g_evFrameStop   = nullptr;
-static cudaEvent_t g_evKernelStart = nullptr;
-static cudaEvent_t g_evKernelStop  = nullptr;
+// CUDA-Events
+static cudaEvent_t g_evFrameStart=nullptr,g_evFrameStop=nullptr;
+static cudaEvent_t g_evKernelStart=nullptr,g_evKernelStop=nullptr;
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  CUDA-Allokation / Init
+//  Allokation / Init  (GPU oder CPU je nach Flag)
 // ─────────────────────────────────────────────────────────────────────────────
-static void cudaAllocAndInit()
+static void allocAndInit()
 {
+    // Aufräumen
     if(d_flakes){cudaFree(d_flakes);d_flakes=nullptr;}
     if(d_rng)   {cudaFree(d_rng);   d_rng=nullptr;}
     if(h_flakes){delete[]h_flakes;  h_flakes=nullptr;}
+    if(h_rngStates){delete[]h_rngStates;h_rngStates=nullptr;}
 
-    cudaMalloc(&d_flakes,g_numFlakes*sizeof(Flake));
-    cudaMalloc(&d_rng,   g_numFlakes*sizeof(curandState));
-    h_flakes=new Flake[g_numFlakes];
+    h_flakes = new Flake[g_numFlakes];
 
-    int blocks=(g_numFlakes+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK;
-    initRngKernel<<<blocks,THREADS_PER_BLOCK>>>(d_rng,g_numFlakes,(unsigned long long)time(nullptr));
-    cudaDeviceSynchronize();
-    initFlakesKernel<<<blocks,THREADS_PER_BLOCK>>>(d_flakes,d_rng,g_numFlakes);
-    cudaDeviceSynchronize();
+    if(g_useCPU){
+        // CPU-Pfad: nur Host-Speicher
+        h_rngStates = new uint64_t[g_numFlakes];
+        cpuInitFlakes();
+    } else {
+        // GPU-Pfad
+        cudaMalloc(&d_flakes,g_numFlakes*sizeof(Flake));
+        cudaMalloc(&d_rng,   g_numFlakes*sizeof(curandState));
+        int blocks=(g_numFlakes+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK;
+        initRngKernel<<<blocks,THREADS_PER_BLOCK>>>(d_rng,g_numFlakes,(unsigned long long)time(nullptr));
+        cudaDeviceSynchronize();
+        initFlakesKernel<<<blocks,THREADS_PER_BLOCK>>>(d_flakes,d_rng,g_numFlakes);
+        cudaDeviceSynchronize();
 
-    // Events einmalig anlegen
-    if(!g_evFrameStart){
-        cudaEventCreate(&g_evFrameStart);
-        cudaEventCreate(&g_evFrameStop);
-        cudaEventCreate(&g_evKernelStart);
-        cudaEventCreate(&g_evKernelStop);
+        if(!g_evFrameStart){
+            cudaEventCreate(&g_evFrameStart); cudaEventCreate(&g_evFrameStop);
+            cudaEventCreate(&g_evKernelStart);cudaEventCreate(&g_evKernelStop);
+        }
     }
 
     g_frame=0; g_fps=0.f; g_kernelMs=0.f; g_frameMs=0.f;
-    g_fpsFrameAcc=0; g_fpsTimeAcc=0;
+    g_kernelMsAcc=0.f; g_frameMsAcc=0.f; g_perfFrameAcc=0; g_perfTimeAcc=0;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -279,7 +418,6 @@ static void setPixelProj()
 {glMatrixMode(GL_PROJECTION);glLoadIdentity();glOrtho(0,WIN_W,WIN_H,0,-1,1);glMatrixMode(GL_MODELVIEW);glLoadIdentity();}
 static void setSceneProj()
 {glMatrixMode(GL_PROJECTION);glLoadIdentity();glOrtho(0,1,0,1,-1,1);glMatrixMode(GL_MODELVIEW);glLoadIdentity();}
-
 static void drawText(float px,float py,const char*s,void*font=GLUT_BITMAP_8_BY_13)
 {glRasterPos2f(px,py);for(const char*c=s;*c;c++)glutBitmapCharacter(font,*c);}
 static void fillPx(float x0,float y0,float x1,float y1)
@@ -287,32 +425,75 @@ static void fillPx(float x0,float y0,float x1,float y1)
 static void strokePx(float x0,float y0,float x1,float y1)
 {glBegin(GL_LINE_LOOP);glVertex2f(x0,y0);glVertex2f(x1,y0);glVertex2f(x1,y1);glVertex2f(x0,y1);glEnd();}
 
+// Einfacher Toggle-Switch (für FPS Uncap)
+static void drawSwitch(float cx,float cy,bool on)
+{
+    float hw=18.f,hh=8.f;
+    float x0=cx-hw,y0=cy-hh,x1=cx+hw,y1=cy+hh;
+    glColor4f(on?0.2f:0.25f,on?0.7f:0.25f,on?0.2f:0.35f,0.85f);
+    fillPx(x0,y0,x1,y1);
+    glColor4f(0.5f,0.5f,0.8f,0.7f); strokePx(x0,y0,x1,y1);
+    float kx=on?cx+hw-hh:cx-hw+hh,kr=hh-1.f;
+    glColor4f(1.f,1.f,1.f,0.95f);
+    fillPx(kx-kr,cy-kr,kx+kr,cy+kr);
+}
+
+// CPU/GPU-Switch: nur Track + Knob, Labels werden außen in drawMenu gezeichnet
+// g_cpuGpuLockUntil: glutGet-Zeitstempel bis zu dem der Switch gesperrt ist
+static int g_cpuGpuLockUntil = 0;
+
+static void drawCpuGpuSwitch(float cx, float cy)
+{
+    float hw=18.f, hh=9.f;
+    float x0=cx-hw,y0=cy-hh,x1=cx+hw,y1=cy+hh;
+
+    bool locked = (glutGet(GLUT_ELAPSED_TIME) < g_cpuGpuLockUntil);
+    float dim = locked ? 0.5f : 1.0f;
+    if(g_useCPU) glColor4f(0.7f*dim,0.35f*dim,0.05f*dim,0.85f);
+    else         glColor4f(0.1f*dim,0.35f*dim,0.75f*dim,0.85f);
+    fillPx(x0,y0,x1,y1);
+    glColor4f(0.6f,0.6f,0.9f,0.7f); strokePx(x0,y0,x1,y1);
+
+    float kx = g_useCPU ? cx+hw-hh : cx-hw+hh;
+    float kr  = hh-1.5f;
+    glColor4f(dim,dim,dim,0.95f);
+    fillPx(kx-kr,cy-kr,kx+kr,cy+kr);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Menü-Layout
 // ─────────────────────────────────────────────────────────────────────────────
-static constexpr float MX  = 8.f;
-static constexpr float MY  = 8.f;
-static constexpr float MW  = 220.f;
+static constexpr float MX=8.f,MY=8.f,MW=230.f;
 
-static constexpr float ROW_TITLE   = MY + 18.f;
-static constexpr float ROW_FPS     = MY + 38.f;
-static constexpr float ROW_KERNEL  = MY + 55.f;
-static constexpr float ROW_FRAME   = MY + 72.f;
-static constexpr float ROW_DIV     = MY + 84.f;
-static constexpr float ROW_FLAKES  = MY + 99.f;
-static constexpr float ROW_STEPS   = MY + 118.f;
-static constexpr float ROW_BTN     = MY + 144.f;
-static constexpr float MH          = ROW_BTN + 20.f - MY;
+static constexpr float ROW_TITLE  = MY+18.f;
+static constexpr float ROW_FPS    = MY+38.f;
+static constexpr float ROW_KERNEL = MY+55.f;
+static constexpr float ROW_FRAME  = MY+72.f;
+static constexpr float ROW_DIV1   = MY+84.f;
+static constexpr float ROW_UNCAP  = MY+100.f;
+static constexpr float ROW_CPUGPU = MY+120.f;
+static constexpr float ROW_DIV2   = MY+134.f;
+static constexpr float ROW_FLAKES = MY+149.f;
+static constexpr float ROW_STEPS  = MY+168.f;
+static constexpr float ROW_BTN    = MY+194.f;
+static constexpr float MH         = ROW_BTN+20.f-MY;
 
-static constexpr float BTN_X0 = MX+8.f,  BTN_X1 = MX+MW-8.f;
-static constexpr float BTN_Y0 = ROW_BTN-12.f, BTN_Y1 = ROW_BTN+12.f;
-static constexpr float STEP_Y0 = ROW_STEPS-10.f, STEP_Y1 = ROW_STEPS+10.f;
-static constexpr float STEP_W  = (MW-16.f)/NUM_FLAKE_STEPS;
+static constexpr float BTN_X0=MX+8.f,BTN_X1=MX+MW-8.f;
+static constexpr float BTN_Y0=ROW_BTN-12.f,BTN_Y1=ROW_BTN+12.f;
+static constexpr float STEP_Y0=ROW_STEPS-10.f,STEP_Y1=ROW_STEPS+10.f;
+static constexpr float STEP_W=(MW-16.f)/NUM_FLAKE_STEPS;
+
+// Switch-Mittelpunkte
+static constexpr float SW_UNCAP_CX  = MX+MW-26.f,  SW_UNCAP_CY  = ROW_UNCAP;
+// CPU/GPU-Switch: mittig im Panel, Platz für Labels links ("GPU") und rechts ("CPU")
+static constexpr float SW_CPUGPU_CX = MX+MW/2.f,   SW_CPUGPU_CY = ROW_CPUGPU;
 
 static bool inRect(float mx,float my,float x0,float y0,float x1,float y1)
 {return mx>=x0&&mx<=x1&&my>=y0&&my<=y1;}
 static bool inStep(float mx,float my,int i)
 {float x0=MX+8.f+i*STEP_W,x1=x0+STEP_W-2.f;return inRect(mx,my,x0,STEP_Y0,x1,STEP_Y1);}
+static bool inSwitch(float mx,float my,float cx,float cy,float hw,float hh)
+{return inRect(mx,my,cx-hw,cy-hh,cx+hw,cy+hh);}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Menü zeichnen
@@ -323,36 +504,59 @@ static void drawMenu()
     glDisable(GL_LINE_SMOOTH);
     glLineWidth(1.f);
 
-    // Panel
     glColor4f(0.05f,0.05f,0.12f,0.85f); fillPx(MX,MY,MX+MW,MY+MH);
     glColor4f(0.3f,0.5f,1.f,0.6f);      strokePx(MX,MY,MX+MW,MY+MH);
+
+    char buf[80];
 
     // Titel
     glColor4f(0.6f,0.8f,1.f,1.f);
     drawText(MX+8.f,ROW_TITLE+4.f,"CUDA Snow Sim",GLUT_BITMAP_8_BY_13);
-
-    char buf[80];
 
     // FPS
     snprintf(buf,sizeof(buf),"FPS:    %.1f",g_fps);
     glColor4f(0.4f,1.f,0.5f,1.f);
     drawText(MX+8.f,ROW_FPS+4.f,buf,GLUT_BITMAP_8_BY_13);
 
-    // Kernel-Zeit
+    // Kernel
     snprintf(buf,sizeof(buf),"Kernel: %.3f ms",g_kernelMs);
     glColor4f(1.f,0.75f,0.2f,1.f);
     drawText(MX+8.f,ROW_KERNEL+4.f,buf,GLUT_BITMAP_8_BY_13);
 
-    // Gesamt-Frame-Zeit
+    // Frame
     snprintf(buf,sizeof(buf),"Frame:  %.3f ms",g_frameMs);
     glColor4f(1.f,0.45f,0.45f,1.f);
     drawText(MX+8.f,ROW_FRAME+4.f,buf,GLUT_BITMAP_8_BY_13);
 
-    // Trennlinie
+    // Trennlinie 1
     glColor4f(0.3f,0.4f,0.7f,0.5f);
-    glBegin(GL_LINES);glVertex2f(MX+6.f,ROW_DIV);glVertex2f(MX+MW-6.f,ROW_DIV);glEnd();
+    glBegin(GL_LINES);glVertex2f(MX+6.f,ROW_DIV1);glVertex2f(MX+MW-6.f,ROW_DIV1);glEnd();
 
-    // Flocken-Label
+    // FPS Uncapped
+    glColor4f(0.85f,0.85f,0.85f,1.f);
+    drawText(MX+8.f,ROW_UNCAP+4.f,"FPS Uncapped",GLUT_BITMAP_8_BY_13);
+    drawSwitch(SW_UNCAP_CX,SW_UNCAP_CY,g_uncapFps);
+
+    // CPU/GPU Switch – Label "GPU" links, Switch mittig, "CPU" rechts
+    {
+        bool locked=(glutGet(GLUT_ELAPSED_TIME)<g_cpuGpuLockUntil);
+        // "GPU" links vom Switch
+        glColor4f(g_useCPU?0.45f:1.f, g_useCPU?0.45f:1.f, g_useCPU?0.45f:1.f, 1.f);
+        drawText(SW_CPUGPU_CX-18.f-28.f, ROW_CPUGPU+4.f, "GPU", GLUT_BITMAP_8_BY_13);
+        // Switch selbst
+        drawCpuGpuSwitch(SW_CPUGPU_CX,SW_CPUGPU_CY);
+        // "CPU" rechts vom Switch
+        glColor4f(g_useCPU?1.f:0.45f, g_useCPU?0.85f:0.45f, g_useCPU?0.45f:0.45f, 1.f);
+        drawText(SW_CPUGPU_CX+18.f+4.f,  ROW_CPUGPU+4.f, "CPU", GLUT_BITMAP_8_BY_13);
+        // Lock-Hinweis (kleines "..." wenn gesperrt)
+        if(locked){ glColor4f(0.6f,0.6f,0.6f,0.8f); drawText(SW_CPUGPU_CX-6.f,ROW_CPUGPU+4.f,"...",GLUT_BITMAP_8_BY_13); }
+    }
+
+    // Trennlinie 2
+    glColor4f(0.3f,0.4f,0.7f,0.5f);
+    glBegin(GL_LINES);glVertex2f(MX+6.f,ROW_DIV2);glVertex2f(MX+MW-6.f,ROW_DIV2);glEnd();
+
+    // Flocken
     snprintf(buf,sizeof(buf),"Flakes: %d",g_numFlakes);
     glColor4f(0.9f,0.9f,0.9f,1.f);
     drawText(MX+8.f,ROW_FLAKES+4.f,buf,GLUT_BITMAP_8_BY_13);
@@ -370,7 +574,7 @@ static void drawMenu()
         drawText(x0+2.f,STEP_Y0+13.f,labels[i],GLUT_BITMAP_8_BY_13);
     }
 
-    // Restart-Button
+    // Restart
     glColor4f(0.15f,0.45f,0.15f,0.88f); fillPx(BTN_X0,BTN_Y0,BTN_X1,BTN_Y1);
     glColor4f(0.35f,1.f,0.35f,1.f);     strokePx(BTN_X0,BTN_Y0,BTN_X1,BTN_Y1);
     glColor4f(1.f,1.f,1.f,1.f);
@@ -387,15 +591,13 @@ static void drawScene()
 {
     glColor4f(0.f,0.f,0.f,1.f);
     glBegin(GL_QUADS);glVertex2f(0,0);glVertex2f(1,0);glVertex2f(1,1);glVertex2f(0,1);glEnd();
-
     glowRect(HOUSE_X0,HOUSE_WALL_Y0,HOUSE_X1,HOUSE_WALL_Y1,1.f,0.55f,0.05f);
     glowRect(HOUSE_X0+0.04f,HOUSE_WALL_Y0+0.10f,HOUSE_X0+0.10f,HOUSE_WALL_Y0+0.18f,1.f,0.9f,0.2f);
     glowRect(HOUSE_X1-0.10f,HOUSE_WALL_Y0+0.10f,HOUSE_X1-0.04f,HOUSE_WALL_Y0+0.18f,1.f,0.9f,0.2f);
     glowRect(ROOF_PEAK_X-0.035f,HOUSE_WALL_Y0,ROOF_PEAK_X+0.035f,HOUSE_WALL_Y0+0.12f,0.85f,0.1f,0.7f);
     glowTri(HOUSE_X0,HOUSE_WALL_Y1,HOUSE_X1,HOUSE_WALL_Y1,ROOF_PEAK_X,ROOF_PEAK_Y,1.f,0.15f,0.15f);
-
     glowRect(TREE_TRUNK_X0,TREE_TRUNK_Y0,TREE_TRUNK_X1,TREE_TRUNK_Y1,0.8f,0.4f,0.05f);
-    static const float tc[3][3]={{0.10f,1.00f,0.35f},{0.15f,0.85f,0.50f},{0.20f,0.70f,0.65f}};
+    static const float tc[3][3]={{0.10f,1.f,0.35f},{0.15f,0.85f,0.50f},{0.20f,0.70f,0.65f}};
     for(int i=0;i<3;i++){const TriLayer&L=TREE_LAYERS_HOST[i];
         glowTri(L.x0,L.yBase,L.x1,L.yBase,TREE_X,L.yTip,tc[i][0],tc[i][1],tc[i][2]);}
 
@@ -417,45 +619,51 @@ static void drawScene()
 static void doRestart()
 {
     g_numFlakes=FLAKE_COUNTS[g_flakeStepIdx];
-    cudaAllocAndInit();
+    allocAndInit();
 }
 
 static void display()
 {
-    // ── Frame-Start-Event ────────────────────────────────────────────────────
-    // Erfasst: Kernel + cudaMemcpy (der eigentliche GPU→CPU-Flaschenhals)
-    cudaEventRecord(g_evFrameStart);
+    float kMs=0.f,fMs=0.f;
 
-    // ── Kernel mit eigener Zeitmessung ──────────────────────────────────────
-    int blocks=(g_numFlakes+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK;
-    cudaEventRecord(g_evKernelStart);
-    updateFlakesKernel<<<blocks,THREADS_PER_BLOCK>>>(d_flakes,d_rng,g_numFlakes,DT,WIND_BASE);
-    cudaEventRecord(g_evKernelStop);
-
-    // ── Memcpy Device→Host ───────────────────────────────────────────────────
-    cudaMemcpy(h_flakes,d_flakes,g_numFlakes*sizeof(Flake),cudaMemcpyDeviceToHost);
-
-    // ── Frame-Stop-Event (nach Memcpy) ───────────────────────────────────────
-    cudaEventRecord(g_evFrameStop);
-    cudaEventSynchronize(g_evFrameStop);
-
-    // Zeiten auslesen und glätten (α=0.1)
-    float kMs=0.f, fMs=0.f;
-    cudaEventElapsedTime(&kMs, g_evKernelStart, g_evKernelStop);
-    cudaEventElapsedTime(&fMs, g_evFrameStart,  g_evFrameStop);
-    g_kernelMs = g_kernelMs*0.9f + kMs*0.1f;
-    g_frameMs  = g_frameMs *0.9f + fMs*0.1f;
-
-    // ── FPS (Wanduhr) ────────────────────────────────────────────────────────
-    static int lastTime=0;
-    int now=glutGet(GLUT_ELAPSED_TIME);
-    g_fpsTimeAcc+=now-lastTime; lastTime=now; g_fpsFrameAcc++;
-    if(g_fpsTimeAcc>=400){
-        g_fps=(float)g_fpsFrameAcc*1000.f/(float)g_fpsTimeAcc;
-        g_fpsFrameAcc=0; g_fpsTimeAcc=0;
+    if(g_useCPU){
+        // CPU-Pfad: chrono für Zeitmessung
+        auto t0=std::chrono::high_resolution_clock::now();
+        cpuUpdateFlakes(DT,WIND_BASE);
+        auto t1=std::chrono::high_resolution_clock::now();
+        // h_flakes ist bereits aktuell – kein Memcpy nötig
+        auto t2=std::chrono::high_resolution_clock::now();
+        kMs=(float)std::chrono::duration_cast<std::chrono::microseconds>(t1-t0).count()/1000.f;
+        fMs=(float)std::chrono::duration_cast<std::chrono::microseconds>(t2-t0).count()/1000.f;
+    } else {
+        // GPU-Pfad: CUDA-Events
+        int blocks=(g_numFlakes+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK;
+        cudaEventRecord(g_evFrameStart);
+        cudaEventRecord(g_evKernelStart);
+        updateFlakesKernel<<<blocks,THREADS_PER_BLOCK>>>(d_flakes,d_rng,g_numFlakes,DT,WIND_BASE);
+        cudaEventRecord(g_evKernelStop);
+        cudaMemcpy(h_flakes,d_flakes,g_numFlakes*sizeof(Flake),cudaMemcpyDeviceToHost);
+        cudaEventRecord(g_evFrameStop);
+        cudaEventSynchronize(g_evFrameStop);
+        cudaEventElapsedTime(&kMs,g_evKernelStart,g_evKernelStop);
+        cudaEventElapsedTime(&fMs,g_evFrameStart, g_evFrameStop);
     }
 
-    // ── Rendering ────────────────────────────────────────────────────────────
+    // 1-Sekunden-Akkumulation
+    static int lastTime=0;
+    int now=glutGet(GLUT_ELAPSED_TIME);
+    int dtMs=now-lastTime; lastTime=now;
+    g_kernelMsAcc+=kMs; g_frameMsAcc+=fMs;
+    g_perfFrameAcc++; g_perfTimeAcc+=dtMs;
+    if(g_perfTimeAcc>=1000){
+        float n=(float)g_perfFrameAcc;
+        g_fps=n*1000.f/(float)g_perfTimeAcc;
+        g_kernelMs=g_kernelMsAcc/n;
+        g_frameMs =g_frameMsAcc /n;
+        g_kernelMsAcc=0.f;g_frameMsAcc=0.f;
+        g_perfFrameAcc=0;g_perfTimeAcc=0;
+    }
+
     glClear(GL_COLOR_BUFFER_BIT);
     setSceneProj();
     drawScene();
@@ -470,13 +678,35 @@ static void mouse(int button,int state,int mx,int my)
 {
     if(button!=GLUT_LEFT_BUTTON||state!=GLUT_DOWN)return;
     float fx=(float)mx,fy=(float)my;
+
+    // FPS Uncap
+    if(inSwitch(fx,fy,SW_UNCAP_CX,SW_UNCAP_CY,18.f,8.f)){
+        g_uncapFps=!g_uncapFps; applyVsync(); return;
+    }
+    // CPU/GPU Switch – Klick nur wenn nicht gelockt
+    if(inSwitch(fx,fy,SW_CPUGPU_CX,SW_CPUGPU_CY,18.f,9.f)){
+        if(glutGet(GLUT_ELAPSED_TIME) >= g_cpuGpuLockUntil){
+            g_useCPU=!g_useCPU;
+            g_cpuGpuLockUntil=glutGet(GLUT_ELAPSED_TIME)+1000; // 1 Sekunde Lock
+            doRestart();
+        }
+        return;
+    }
+    // Stufen
     for(int i=0;i<NUM_FLAKE_STEPS;i++) if(inStep(fx,fy,i)){g_flakeStepIdx=i;return;}
+    // Restart
     if(inRect(fx,fy,BTN_X0,BTN_Y0,BTN_X1,BTN_Y1)){doRestart();return;}
 }
 
 static void keyboard(unsigned char key,int,int)
 {
-    if(key==27||key=='q'){cudaFree(d_flakes);cudaFree(d_rng);delete[]h_flakes;exit(0);}
+    if(key==27||key=='q'){
+        if(d_flakes)cudaFree(d_flakes);
+        if(d_rng)cudaFree(d_rng);
+        delete[]h_flakes;
+        if(h_rngStates)delete[]h_rngStates;
+        exit(0);
+    }
     if(key=='r') doRestart();
 }
 
@@ -488,9 +718,9 @@ static void reshape(int w,int h){glViewport(0,0,w,h);}
 int main(int argc,char**argv)
 {
     int dc=0; cudaGetDeviceCount(&dc);
-    if(dc==0){fprintf(stderr,"Kein CUDA-Gerät!\n");return 1;}
+    if(dc==0){fprintf(stderr,"Kein CUDA-Gerat!\n");return 1;}
     cudaDeviceProp prop; cudaGetDeviceProperties(&prop,0);
-    printf("CUDA-Gerät: %s\n",prop.name);
+    printf("CUDA-Gerat: %s\n",prop.name);
 
     glutInit(&argc,argv);
     glutInitDisplayMode(GLUT_DOUBLE|GLUT_RGBA);
@@ -500,13 +730,10 @@ int main(int argc,char**argv)
     GLenum err=glewInit();
     if(err!=GLEW_OK){fprintf(stderr,"GLEW: %s\n",glewGetErrorString(err));return 1;}
 
-    // ── VSync deaktivieren (Windows) ─────────────────────────────────────────
 #ifdef _WIN32
-    typedef BOOL (WINAPI* PFNWGLSWAPINTERVALEXTPROC)(int);
-    PFNWGLSWAPINTERVALEXTPROC wglSwapIntervalEXT =
-        (PFNWGLSWAPINTERVALEXTPROC)wglGetProcAddress("wglSwapIntervalEXT");
-    if(wglSwapIntervalEXT){ wglSwapIntervalEXT(0); printf("VSync deaktiviert (WGL)\n"); }
-    else                   { printf("wglSwapIntervalEXT nicht verfügbar\n"); }
+    g_wglSwapInterval=(PFNWGLSWAPINTERVALEXTPROC)wglGetProcAddress("wglSwapIntervalEXT");
+    if(g_wglSwapInterval){g_wglSwapInterval(1);printf("VSync: an (Toggle im Menu)\n");}
+    else printf("wglSwapIntervalEXT nicht verfugbar\n");
 #endif
 
     glEnable(GL_POINT_SMOOTH);
@@ -514,7 +741,7 @@ int main(int argc,char**argv)
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
 
-    cudaAllocAndInit();
+    allocAndInit();   // startet im GPU-Modus
 
     glutDisplayFunc(display);
     glutIdleFunc(idle);
@@ -522,7 +749,7 @@ int main(int argc,char**argv)
     glutMouseFunc(mouse);
     glutReshapeFunc(reshape);
 
-    printf("ESC/q=Beenden | r=Restart | Klick auf Menü\n");
+    printf("ESC/q=Beenden | r=Restart | Klick auf Menu\n");
     glutMainLoop();
     return 0;
 }
