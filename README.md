@@ -58,12 +58,12 @@ Jedes Frame ruft das Programm cpuUpdateFlakes() auf.
 Die Funktion iteriert in einer for-Schleife sequenziell über alle Flocken und berechnet jede einzeln.    
 Die folgenden Schritte werden für jede aktive Flocke in dieser Reihenfolge ausgeführt.  
 
-### Schritt 1: Inaktive Flocken mit `spawnDelay` überspringen  
+#### Schritt 1: Inaktive Flocken mit `spawnDelay` überspringen  
 ```
 if spawnDelay > 0  →  spawnDelay -= dt, überspringen (noch nicht aktiv)
 ```
 
-### Schritt 2: Wind und Turbulenz berechnen  
+#### Schritt 2: Wind und Turbulenz berechnen  
 
 ```
 personalWind = WIND_BASE × 0.1 + (random - 0.5) × WIND_BASE × 4.0
@@ -75,14 +75,14 @@ Jede Flocke bekommt ihren eigenen, zufällig variierenden Windanteil.
 Das Ergebnis ist ein globaler Wind der im Mittel nach rechts weht, aber pro Flocke und Frame stark variiert.  
 Zusätzlich gibt es eine kleine zufällige Turbulenz in beide Richtungen (`turbX`, `turbY`).  
 
-### Schritt 3: Geschwindigkeit aktualisieren
+#### Schritt 3: Geschwindigkeit aktualisieren
 
 ```
 vx += (personalWind + turbX) × dt
 vy -= GRAVITY × fallSpeed × dt + turbY × dt
 ```
 
-### Schritt 4: Dämpfung (Luftwiderstand)
+#### Schritt 4: Dämpfung (Luftwiderstand)
 
 ```
 vx *= 0.98
@@ -92,7 +92,7 @@ vy *= 0.99
 Jedes Frame wird die Geschwindigkeit um 2% (horizontal) bzw. 1% (vertikal) reduziert.  
 Das modelliert den Luftwiderstand und regelt die ständige Windbeschleunigung herunter.
 
-### Schritt 5: Geschwindigkeit begrenzen (Clamp)  
+#### Schritt 5: Geschwindigkeit begrenzen (Clamp)  
 
 ```
 vy  ≥  -0.003 × fallSpeed   (maximale Fallgeschwindigkeit)
@@ -102,7 +102,7 @@ vx  ∈  [-0.004, +0.004]     (maximale Horizontalgeschwindigkeit)
 Die Geschwindigkeit wird nach oben und unten begrenzt, damit Flocken nicht beliebig schnell werden  
 und bei großen Zeitschritten tief in Kollisionsgeometrie eindringen könnten.  
 
-### Schritt 6: Position aktualisieren und horizontaler Wrap-around
+#### Schritt 6: Position aktualisieren und horizontaler Wrap-around
 
 ```
 x += vx
@@ -114,7 +114,7 @@ if x > 1.0  →  x -= 1.0
 Flocken die links aus dem Bild fliegen erscheinen rechts wieder, und umgekehrt.  
 
 
-### Schritt 8: Respawn am unteren Rand
+#### Schritt 7: Respawn am unteren Rand
 
 Wenn `y < -0.02` (Flocke hat den unteren Bildrand verlassen):
 
