@@ -1,9 +1,11 @@
 # CUDA Snow Simulation
+*Author: Alexander Doppelbauer*  
 
 ## Überblick
 
 Dieses Programm simuliert fallenden Schnee in einer 2D-Szene mit Haus und Baum.  
-Es dient gleichzeitig als Benchmark, um den Leistungsunterschied zwischen einer reinen CPU-Simulation und einer GPU-beschleunigten CUDA-Simulation zu vergleichen.  
+Es dient gleichzeitig als Benchmark, um den Leistungsunterschied zwischen einer reinen CPU-Simulation  
+und einer GPU-beschleunigten CUDA-Simulation zu vergleichen.  
 
 ## Das Koordinatensystem
 
@@ -40,7 +42,7 @@ die eine Flocke abwarten muss, bevor sie respawned.
 
 `fallSpeed` beinhält einen individuellen Multiplikator auf die Schwerkraft zwischen 100% und 150% in 5%-Schritten.  
 
-## Zufallszahlengenerierung im CPU-Modus
+## Zufallszahlengenerierung per CPU
 
 Im CPU-Modus hat jede Flocke einen eigenen `uint64_t`-Zustandswert (`h_rngStates[id]`).  
 Für jede benötigte Zufallszahl wird ein **Linear Congruential Generator (LCG)** aufgerufen:  
@@ -121,7 +123,7 @@ Wenn `y < -0.02` (Flocke hat den unteren Bildrand verlassen):
 Flocke wird neu gespawned mit zufälliger X-Position, `y = 1.02`, neuer zufällige Geschwindigkeit,  
 neuem `spawnDelay` und neuem `fallSpeed`.  
 
-## Kollisionserkennung
+## Kollisionserkennung per CPU
 
 Nach dem Positions-Update wird jede Flocke ein mal pro Frame gegen alle Szenen-Geometrien geprüft.  
 Dabei werden zwei Typen von Kollisionsgeometrie verwendet:  
