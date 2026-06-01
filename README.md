@@ -156,3 +156,116 @@ Der `restitution`-Faktor von `0.05` bewirkt, dass die Flocke nach einer Kollisio
 zurückprallt und somit fast vollständig inelastisch wirkt.  
 Als zweite Sicherheitsebene wird nach der Kollisionsschleife geprüft, ob die Flocke trotz Auflösung noch innerhalb des Dreiecks liegt.  
 Falls ja, wird die Flocke sofort neu gespawnt.  
+
+---
+
+## GPU-Modus: CUDA-Implementierung
+
+Im GPU-Modus läuft die gesamte Physik-Berechnung auf der Grafikkarte. Die Logik ist dabei identisch zur CPU-Implementierung.  
+Das Rendering übernimmt weiterhin die CPU.  
+
+## Parallelisierung: Ein Thread pro Schneeflocke
+
+Während die CPU alle Flocken sequenziell in einer `for`-Schleife berechnet, weist die GPU jedem Thread genau eine Flocke zu.  
+Alle Flocken werden damit gleichzeitig und unabhängig voneinander berechnet.  
+
+Die Threads werden in Blöcken von je 128 Threads organisiert:  
+```cpp
+int blocks = (g_numFlakes + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+updateFlakesKernel<<<blocks, THREADS_PER_BLOCK>>>(...);
+```
+Bei 4096 Flocken entstehen damit 32 Blöcke à 128 Threads. Die Flockenanzahl muss deshalb immer ein Vielfaches von 128 sein.  
+
+## Der Kernel
+
+Statt einer Funktion die über alle Flocken iteriert, gibt es eine `__global__`-Funktion die von der GPU für jeden Thread einmal ausgeführt wird.  
+
+```cpp
+__global__ void updateFlakesKernel(Flake* flakes, curandState* rng, int n, float dt, float wind)
+{
+    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    if(id >= n) return;
+    Flake f = flakes[id];
+    ...
+}
+```
+
+## Speicher
+
+Im GPU-Modus liegen die Flocken-Daten im **Device Memory** der GPU (`d_flakes`). Der CPU-Zugriff darauf ist nicht direkt möglich.  
+Nach jeder Berechnung müssen die Daten deshalb explizit zurück auf den Host kopiert werden, damit OpenGL sie rendern kann:  
+
+```cpp
+cudaMalloc(&d_flakes, g_numFlakes * sizeof(Flake));
+...
+cudaMemcpy(h_flakes, d_flakes, g_numFlakes * sizeof(Flake), cudaMemcpyDeviceToHost);
+```
+
+`h_flakes` ist dabei das CPU-seitige Spiegelarray im normalen RAM, aus dem OpenGL dann die Positionen zum Zeichnen liest.
+Dieser Transfer findet für jeden Frame statt und erhöht somit linear die Leistungskosten pro Flake.  
+
+## Zufallszahlengenerierung per GPU
+
+Der CPU-LCG kann auf der GPU nicht verwendet werden, da jeder Thread einen eigenen unabhängigen Zufallszustand braucht der parallel verwaltet wird.  
+Dafür verwendet CUDA die `curand`-Bibliothek mit einem `curandState` pro Flocke:
+
+```cpp
+curand_init(seed + id * 6364136223846793005ULL, id, 0, &rng[id]);
+```
+
+Jede Flocke bekommt damit einen eindeutigen Startzustand. Im laufenden Betrieb wird der Zustand direkt im Kernel über `curand_uniform(&r)` abgerufen.
+
+## Geometrie im Constant Memory
+
+Die Kollisionsgeometrie liegt auf der GPU im **Constant Memory**, also einem gecachten Speicherbereich der für Daten gedacht ist, die alle Threads gleichzeitig lesen:  
+
+```cpp
+__device__ __constant__ TriLayer TREE_LAYERS[3] = { ... };
+__device__ __constant__ AABB AABB_OBJECTS[2]    = { ... };
+```
+
+Wenn alle 128 Threads eines Blocks dieselbe Adresse lesen, wird der Wert einmal geladen und per Broadcast an alle weitergegeben.  
+Das ist effizienter als ein normaler Speicherzugriff bei dem jeder Thread einzeln liest.  
+
+## Kollisionserkennung per GPU
+
+Die Kollisionsfunktionen (`gpu_collideAABB`, `gpu_collideRoof`) sind inhaltlich identisch zur CPU-Variante,  
+müssen aber als `__device__`-Funktionen deklariert werden damit der CUDA-Compiler sie für die GPU übersetzt:  
+
+```cpp
+__device__ bool gpu_collideAABB(float x, float y, float r, const AABB& b, ...)
+```
+
+## Das Menü
+
+Das Menü in der linken oberen Ecke ist vollständig in OpenGL gezeichnet, ohne externe UI-Bibliothek.  
+Klickbereiche werden manuell als Rechtecke definiert und mit `glutMouseFunc` auf Mausklicks geprüft.  
+
+### Performance-Anzeige
+
+Die drei obersten Zeilen zeigen die aktuelle Laufzeit-Performance:
+`FPS` gibt die Anzahl der gerenderten Frames pro Sekunde an, gemessen über die Wanduhr. Im Normalfall ist dieser Wert durch VSync auf die Bildschirmwiederholrate gedeckelt.  
+Da die Physikberechnungen pro Frame stattfinden, erzeugt eine höhere Framezahl auch einen schnelleren Schneefall.  
+
+`Kernel` zeigt die durchschnittliche Rechenzeit des Physik-Updates pro Frame in Millisekunden.  
+Im GPU-Modus also die reine Kernel-Laufzeit, im CPU-Modus die Laufzeit der `cpuUpdateFlakes()`-Schleife.  
+
+`Frame` zeigt die gesamte GPU-relevante Zeit pro Frame, also Kernel + `cudaMemcpy`-Transfer.  
+
+Alle drei Werte werden pro Sekunde gemittelt.  
+
+### FPS Uncapped
+
+Schaltet in Windows VSync ein oder aus. Bei **aus** (Standard) ist die Framerate durch den Monitor gedeckelt.  
+Bei **an** läuft das Programm unlimitiert und `Kernel`- sowie `Frame`-Zeit werden zum aussagekräftigen Vergleichswert.  
+
+### GPU / CPU
+
+Schaltet zwischen GPU- und CPU-Modus um. Ein Wechsel löst automatisch einen Restart aus, da der Speicher neu allokiert werden muss.  
+Der Switch ist nach einem Klick für eine Sekunde gesperrt um versehentliches Doppelklicken zu verhindern.  
+
+### Flakes
+
+Zeigt die aktuell aktive Flockenanzahl und darunter eine Auswahlleiste mit sechs vorgegebenen Stufen: `512 · 1k · 2k · 4k · 8k · 16k`.  
+Die Werte sind ausschließlich Zweierpotenzen und Vielfache von 128, damit die Thread-Block-Aufteilung der GPU immer vollständig aufgeht.  
+Die gewählte Stufe wird erst nach einem Klick auf Restart übernommen.  
