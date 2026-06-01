@@ -9,7 +9,7 @@ und einer GPU-beschleunigten CUDA-Simulation zu vergleichen.
 
 ### Systemvoraussetzungen
 Zum Verwenden des Programms ist eine Nvidia GPU der 20er Reihe oder neuer notwendig.  
-Außerdem wird ein aktueller NVIDIA-Treiber benötigt und das Projekt wurde in Windows 11 erstellt und getestet.  
+Außerdem wird ein aktueller NVIDIA-Treiber benötigt. Das Projekt wurde in Windows 11 erstellt und getestet.  
 Damit sollte das Programm im `Windows v1.0` Ordner ausführbar sein, sofern beide .dll Libraries im selben Ordner liegen.  
 Informationen zum Kompilieren und eine nicht getestete Linuxlösung sind in der `Anleitung_Kompilieren.txt`.  
 
@@ -37,18 +37,18 @@ struct Flake {
 
 `x`, `y` beinhalten die aktuelle Position der Flocke in der Szene.  
 
-`vx`, `vy` beinhält die Geschwindigkeit, welche zum Start zufällig aus den Bereichen [-0.0025, +0.0025], [-0.0035, -0.0015] gewählt wird.  
-Danach wird die Geschwindigkeit für jedes Frame angepasst durch Physik und Dämpfung nach folgender Formeln:  
+`vx`, `vy` beinhalten die Geschwindigkeit, welche zum Start zufällig aus den Bereichen [-0.0025, +0.0025], [-0.0035, -0.0015] gewählt wird.  
+Danach wird die Geschwindigkeit für jedes Frame angepasst durch Physik und Dämpfung nach folgenden Formeln:  
 ```cpp
 vx += (personalWind + turbX) * dt;
 vy -= GRAVITY * fallSpeed * dt + turbY * dt;
 ```
-`radius` beinhält den Kollisionsradius  
+`radius` enthält den Kollisionsradius  
 
 `spawnDelay` speichert nach Erreichen von `y < 0` eine zufällige Wartezeit zwischen 0 und 1 Sekunde,  
-die eine Flocke abwarten muss, bevor sie respawned.  
+die eine Flocke abwarten muss, bevor sie neu spawnt.  
 
-`fallSpeed` beinhält einen individuellen Multiplikator auf die Schwerkraft zwischen 100% und 150% in 5%-Schritten.  
+`fallSpeed` enthält einen individuellen Multiplikator auf die Schwerkraft zwischen 100% und 150% in 5%-Schritten.  
 
 ## Zufallszahlengenerierung per CPU
 
@@ -64,7 +64,7 @@ static inline float lcgUniform(uint64_t& s) {
 
 ## Physik-Update pro Frame per CPU
 
-Jedes Frame ruft das Programm cpuUpdateFlakes() auf. 
+Jedes Frame ruft das Programm `cpuUpdateFlakes()` auf. 
 Die Funktion iteriert in einer for-Schleife sequenziell über alle Flocken und berechnet jede einzeln.    
 Die folgenden Schritte werden für jede aktive Flocke in dieser Reihenfolge ausgeführt.  
 
@@ -130,12 +130,12 @@ Flocken die links aus dem Bild fliegen erscheinen rechts wieder, und umgekehrt.
 
 Wenn `y < -0.02` (Flocke hat den unteren Bildrand verlassen):
 
-Flocke wird neu gespawned mit zufälliger X-Position, `y = 1.02`, neuer zufällige Geschwindigkeit,  
+Flocke wird neu gespawned mit zufälliger X-Position, `y = 1.02`, neuer zufälliger Geschwindigkeit,  
 neuem `spawnDelay` und neuem `fallSpeed`.  
 
 ## Kollisionserkennung per CPU
 
-Nach dem Positions-Update wird jede Flocke ein mal pro Frame gegen alle Szenen-Geometrien geprüft.  
+Nach dem Positions-Update wird jede Flocke einmal pro Frame gegen alle Szenen-Geometrien geprüft.  
 Dabei werden zwei Typen von Kollisionsgeometrie verwendet:  
 
 **Achsenparalleles Rechteck (AABB):** Verwendet für die Hauswand und den Baumstamm.  
@@ -210,7 +210,7 @@ cudaMemcpy(h_flakes, d_flakes, g_numFlakes * sizeof(Flake), cudaMemcpyDeviceToHo
 ```
 
 `h_flakes` ist dabei das CPU-seitige Spiegelarray im normalen RAM, aus dem OpenGL dann die Positionen zum Zeichnen liest.
-Dieser Transfer findet für jeden Frame statt und erhöht somit linear die Leistungskosten pro Flake.  
+Dieser Transfer findet für jeden Frame statt und erhöht somit linear die Leistungskosten pro Schneeflocke.  
 
 ## Zufallszahlengenerierung per GPU
 
@@ -225,7 +225,7 @@ Jede Flocke bekommt damit einen eindeutigen Startzustand. Im laufenden Betrieb w
 
 ## Geometrie im Constant Memory
 
-Die Kollisionsgeometrie liegt auf der GPU im **Constant Memory**, also einem gecachten Speicherbereich der für Daten gedacht ist, die alle Threads gleichzeitig lesen:  
+Die Kollisionsgeometrie liegt auf der GPU im **Constant Memory**, also einem gecachten Speicherbereich, der für Daten gedacht ist, die alle Threads gleichzeitig lesen:  
 
 ```cpp
 __device__ __constant__ TriLayer TREE_LAYERS[3] = { ... };
@@ -255,9 +255,9 @@ Klickbereiche werden manuell als Rechtecke definiert und mit `glutMouseFunc` auf
 
 ### Performance-Anzeige
 
-Die drei obersten Zeilen zeigen die aktuelle Laufzeit-Performance:
+Die drei obersten Zeilen zeigen die aktuelle Laufzeit-Performance:  
 `FPS` gibt die Anzahl der gerenderten Frames pro Sekunde an, gemessen über die Wanduhr. Im Normalfall ist dieser Wert durch VSync auf die Bildschirmwiederholrate gedeckelt.  
-Da die Physikberechnungen pro Frame stattfinden, erzeugt eine höhere Framezahl auch einen schnelleren Schneefall.  
+Da die Physikberechnungen pro Frame stattfinden, erzeugt eine höhere Framerate auch einen schnelleren Schneefall.  
 
 `Kernel` zeigt die durchschnittliche Rechenzeit des Physik-Updates pro Frame in Millisekunden.  
 Im GPU-Modus also die reine Kernel-Laufzeit, im CPU-Modus die Laufzeit der `cpuUpdateFlakes()`-Schleife.  
