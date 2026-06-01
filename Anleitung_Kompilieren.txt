@@ -28,3 +28,12 @@ nvcc snow_simulation.cu -o snow_sim.exe ^
     -arch=sm_75 ^
     --cudart static
 Dazu freeglut.dll und glew32.dll im selben Ordner
+
+
+
+Linux Ubuntu (nicht getestet):
+
+sudo apt install freeglut3-dev libglew-dev
+nvcc snow_simulation.cu -o snow_sim \
+    -lGL -lGLU -lglut -lGLEW \
+    -arch=sm_75 --cudart static
