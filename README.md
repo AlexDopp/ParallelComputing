@@ -224,10 +224,6 @@ __device__ __constant__ TriLayer TREE_LAYERS[3] = { ... };
 __device__ __constant__ AABB AABB_OBJECTS[2]    = { ... };
 ```
 
-![Bild](Ressourcen/Bild1.png)
-
----
-
 Wenn alle 128 Threads eines Blocks dieselbe Adresse lesen, wird der Wert einmal geladen und per Broadcast an alle weitergegeben.  
 Das ist effizienter als ein normaler Speicherzugriff bei dem jeder Thread einzeln liest.  
 
@@ -239,6 +235,10 @@ müssen aber als `__device__`-Funktionen deklariert werden damit der CUDA-Compil
 ```cpp
 __device__ bool gpu_collideAABB(float x, float y, float r, const AABB& b, ...)
 ```
+
+![Bild](Ressourcen/Bild1.png)
+
+---
 
 ## Das Menü
 
