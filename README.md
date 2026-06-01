@@ -5,7 +5,15 @@ Dieses Programm simuliert fallenden Schnee in einer 2D-Szene mit Haus und Baum.
 Es dient gleichzeitig als Benchmark, um den Leistungsunterschied zwischen einer reinen CPU-Simulation  
 und einer GPU-beschleunigten CUDA-Simulation zu vergleichen.  
 
-![Video](https://github.com/user-attachments/assets/7d90e08f-8c69-4e9a-8b6f-6603b4bdde04)
+![Video](https://github.com/user-attachments/assets/7d90e08f-8c69-4e9a-8b6f-6603b4bdde04)  
+
+### Systemvoraussetzungen
+Zum Verwenden des Programms ist eine Nvidia GPU der 20er Reihe oder neuer notwendig.  
+Außerdem wird ein aktueller NVIDIA-Treiber benötigt und das Projekt wurde in Windows 11 erstellt und getestet.  
+Damit sollte das Programm im `Windows v1.0` Ordner ausführbar sein, sofern beide .dll Libraries im selben Ordner liegen.  
+Informationen zum Kompilieren und eine nicht getestete Linuxlösung sind in der `Anleitung_Kompilieren.txt`.  
+
+---
 
 ## Das Koordinatensystem
 
