@@ -235,3 +235,37 @@ müssen aber als `__device__`-Funktionen deklariert werden damit der CUDA-Compil
 ```cpp
 __device__ bool gpu_collideAABB(float x, float y, float r, const AABB& b, ...)
 ```
+
+## Das Menü
+
+Das Menü in der linken oberen Ecke ist vollständig in OpenGL gezeichnet, ohne externe UI-Bibliothek.  
+Klickbereiche werden manuell als Rechtecke definiert und mit `glutMouseFunc` auf Mausklicks geprüft.  
+
+### Performance-Anzeige
+
+Die drei obersten Zeilen zeigen die aktuelle Laufzeit-Performance:
+`FPS` gibt die Anzahl der gerenderten Frames pro Sekunde an, gemessen über die Wanduhr. Im Normalfall ist dieser Wert durch VSync auf die Bildschirmwiederholrate gedeckelt.  
+Da die Physikberechnungen pro Frame stattfinden, erzeugt eine höhere Framezahl auch einen schnelleren Schneefall.  
+
+`Kernel` zeigt die durchschnittliche Rechenzeit des Physik-Updates pro Frame in Millisekunden.  
+Im GPU-Modus also die reine Kernel-Laufzeit, im CPU-Modus die Laufzeit der `cpuUpdateFlakes()`-Schleife.  
+
+`Frame` zeigt die gesamte GPU-relevante Zeit pro Frame, also Kernel + `cudaMemcpy`-Transfer.  
+
+Alle drei Werte werden pro Sekunde gemittelt.  
+
+### FPS Uncapped
+
+Schaltet in Windows VSync ein oder aus. Bei **aus** (Standard) ist die Framerate durch den Monitor gedeckelt.  
+Bei **an** läuft das Programm unlimitiert und `Kernel`- sowie `Frame`-Zeit werden zum aussagekräftigen Vergleichswert.  
+
+### GPU / CPU
+
+Schaltet zwischen GPU- und CPU-Modus um. Ein Wechsel löst automatisch einen Restart aus, da der Speicher neu allokiert werden muss.  
+Der Switch ist nach einem Klick für eine Sekunde gesperrt um versehentliches Doppelklicken zu verhindern.  
+
+### Flakes
+
+Zeigt die aktuell aktive Flockenanzahl und darunter eine Auswahlleiste mit sechs vorgegebenen Stufen: `512 · 1k · 2k · 4k · 8k · 16k`.  
+Die Werte sind ausschließlich Zweierpotenzen und Vielfache von 128, damit die Thread-Block-Aufteilung der GPU immer vollständig aufgeht.  
+Die gewählte Stufe wird erst nach einem Klick auf Restart übernommen.  
