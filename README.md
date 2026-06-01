@@ -196,8 +196,13 @@ Im GPU-Modus liegen die Flocken-Daten im **Device Memory** der GPU (`d_flakes`).
 Nach jeder Berechnung müssen die Daten deshalb explizit zurück auf den Host kopiert werden, damit OpenGL sie rendern kann:  
 
 ```cpp
+cudaMalloc(&d_flakes, g_numFlakes * sizeof(Flake));
+...
 cudaMemcpy(h_flakes, d_flakes, g_numFlakes * sizeof(Flake), cudaMemcpyDeviceToHost);
 ```
+
+`h_flakes` ist dabei das CPU-seitige Spiegelarray im normalen RAM, aus dem OpenGL dann die Positionen zum Zeichnen liest.
+Dieser Transfer findet für jeden Frame statt und erhöht somit linear die Leistungskosten pro Flake.  
 
 ## Zufallszahlengenerierung per GPU
 
