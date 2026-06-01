@@ -273,3 +273,29 @@ Der Switch ist nach einem Klick für eine Sekunde gesperrt um versehentliches Do
 Zeigt die aktuell aktive Flockenanzahl und darunter eine Auswahlleiste mit sechs vorgegebenen Stufen: `512 · 1k · 2k · 4k · 8k · 16k`.  
 Die Werte sind ausschließlich Zweierpotenzen und Vielfache von 128, damit die Thread-Block-Aufteilung der GPU immer vollständig aufgeht.  
 Die gewählte Stufe wird erst nach einem Klick auf Restart übernommen.  
+
+---
+
+## Performance Ergebnisse
+
+> Gemessen mit FPS Uncapped aktiviert | GPU: RTX 5070 Ti | CPU: i7-12700KF | Windows 11
+
+| Flakes | Modus | FPS | Kernel (ms) | Frame (ms) | memcpy (%) |
+|--------|-------|-----|-------------|------------|------------|
+| 512    | GPU   |     |             |            |            |
+| 512    | CPU   |     |             |            | –          |
+|        |       |     |             |            |            |
+| 1024   | GPU   |     |             |            |            |
+| 1024   | CPU   |     |             |            | –          |
+|        |       |     |             |            |            |
+| 2048   | GPU   |     |             |            |            |
+| 2048   | CPU   |     |             |            | –          |
+|        |       |     |             |            |            |
+| 4096   | GPU   |     |             |            |            |
+| 4096   | CPU   |     |             |            | –          |
+|        |       |     |             |            |            |
+| 8192   | GPU   |     |             |            |            |
+| 8192   | CPU   |     |             |            | –          |
+|        |       |     |             |            |            |
+| 16384  | GPU   |     |             |            |            |
+| 16384  | CPU   |     |             |            | –          |
